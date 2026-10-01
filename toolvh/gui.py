@@ -150,7 +150,7 @@ class MainWindow(QMainWindow):
         self.settings_store = SettingsStore(settings_path)
         self.profiles, self.recent, self.active_provider = {}, [], None
         self.verified_api = None
-        self.setWindowTitle("ToolVH 0.5.5 · Việt hóa game")
+        self.setWindowTitle("ToolVH 0.6.0 · Việt hóa game")
         self.resize(1420, 940)
         self.setMinimumSize(1060, 740)
         base = QWidget()
@@ -184,7 +184,8 @@ class MainWindow(QMainWindow):
         self.game_path.setPlaceholderText("Chọn thư mục cài đặt game…")
         row.addWidget(self.game_path, 1)
         row.addWidget(self.button("Chọn game…", self.choose_game))
-        self.deep = QCheckBox("Quét sâu bundle")
+        self.deep = QCheckBox("Quét sâu bundle / PCK")
+        self.deep.setToolTip("Đọc Unity bundle và Godot PCK. Unreal LOCRES rời được đọc ở cả hai chế độ.")
         self.deep.setChecked(True)
         self.deep.setToolTip("Đọc cả bundle để tìm các bảng ngôn ngữ nằm trong dữ liệu đóng gói. Có thể mất vài phút.")
         row.addWidget(self.deep)

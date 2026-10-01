@@ -7,9 +7,11 @@ from pathlib import Path
 from .formats import TEXT_EXTENSIONS, decode_text, extract, runtime_metadata
 from .model import FileRecord, Project, digest
 from .unity import extract_unity, resolve_table_entries
+from .godot import RESOURCE_EXTENSIONS, extract_pack, extract_resource
+from .unreal import extract_locres
 
 SKIP_DIRS = {".git", ".venv", "node_modules", "__pycache__", "mono", "managed"}
-BINARY_EXTENSIONS = {".dat", ".bin", ".pak", ".pck", ".rpa", ".db", ".locres", ".uasset", ".bytes"}
+BINARY_EXTENSIONS = {".dat", ".bin", ".pak", ".pck", ".rpa", ".db", ".locres", ".uasset", ".bytes", ".utoc", ".ucas"}
 UNITY_EXTENSIONS = {".assets", ".bundle", ".unity3d", ".assetbundle"}
 
 
@@ -65,13 +67,20 @@ def scan(root: str | Path, progress=lambda text: None, cancelled=lambda: False,
                 engines.add("RPG Maker MV/MZ")
             if ext in (".rpa", ".rpy", ".rpyc"):
                 engines.add("Ren'Py (nhận diện)")
-            if ext in (".pak", ".uasset", ".locres"):
-                engines.add("Unreal / PAK (cần xác minh)")
-            if ext == ".pck":
-                engines.add("Godot / PCK (cần xác minh)")
-            if ext not in TEXT_EXTENSIONS | UNITY_EXTENSIONS | BINARY_EXTENSIONS and ext != "":
+            if ext in (".uasset", ".locres", ".utoc", ".ucas", ".uproject"):
+                engines.add("Unreal Engine")
+            if ext == ".pak":
+                engines.add("PAK (Unreal hoặc engine khác; cần xác minh)")
+            if ext in (".pck", ".tscn", ".tres", ".godot", ".translation"):
+                engines.add("Godot")
+            if ext in (".godot", ".uproject"):
+                continue
+            if ext not in TEXT_EXTENSIONS | UNITY_EXTENSIONS | BINARY_EXTENSIONS | RESOURCE_EXTENSIONS and ext != "":
                 continue
             rel = path.relative_to(root).as_posix()
+            if ext in TEXT_EXTENSIONS | RESOURCE_EXTENSIONS and any(Path(str(path) + suffix).exists() for suffix in (".import", ".remap")):
+                project.files.append(FileRecord(rel, "metadata", note="Godot import/remap: file nguồn không được dùng trực tiếp; cần đọc tài nguyên đích."))
+                continue
             if runtime_metadata(rel):
                 project.files.append(FileRecord(rel, "metadata", note="Cấu hình runtime Unity/Addressables; không phải text game."))
                 continue
@@ -79,15 +88,15 @@ def scan(root: str | Path, progress=lambda text: None, cancelled=lambda: False,
                 with path.open("rb") as stream:
                     header = stream.read(64)
                 unity = is_unity(path, header)
-                if not unity and ext not in TEXT_EXTENSIONS | BINARY_EXTENSIONS:
+                if not unity and ext not in TEXT_EXTENSIONS | BINARY_EXTENSIONS | RESOURCE_EXTENSIONS:
                     continue
                 size = path.stat().st_size
                 if size > max_mb * 1024 * 1024:
                     project.files.append(FileRecord(rel, "skipped", size=size, note=f"Vượt giới hạn {max_mb} MB/file."))
                     continue
                 # Quick scan visits root assets first; bundles are listed for optional deep scan.
-                if unity and not deep and header.startswith((b"UnityFS", b"UnityWeb", b"UnityRaw")):
-                    project.files.append(FileRecord(rel, "bundle", size=size, note="Chọn Quét sâu để đọc bundle."))
+                if not deep and ((unity and header.startswith((b"UnityFS", b"UnityWeb", b"UnityRaw"))) or ext == ".pck"):
+                    project.files.append(FileRecord(rel, "bundle", size=size, note="Chọn Quét sâu để đọc bundle/PCK."))
                     continue
                 candidates.append((path, rel, size, unity))
             except OSError as exc:
@@ -103,6 +112,12 @@ def scan(root: str | Path, progress=lambda text: None, cancelled=lambda: False,
             record.sha256 = digest(data)
             if unity:
                 entries, record.note = extract_unity(data, rel, cancelled, script_registry=scripts)
+            elif record.kind == "locres":
+                entries, record.note = extract_locres(data, rel)
+            elif record.kind == "pck":
+                entries, record.note = extract_pack(data, rel, cancelled)
+            elif path.suffix.lower() in RESOURCE_EXTENSIONS:
+                entries, record.note = extract_resource(data, record.kind, rel)
             elif path.suffix.lower() in TEXT_EXTENSIONS:
                 text, record.encoding = decode_text(data)
                 entries = extract(text, record.kind, rel)
@@ -114,7 +129,11 @@ def scan(root: str | Path, progress=lambda text: None, cancelled=lambda: False,
                         samples.append(f"0x{match.start():X}: {text[:100]}")
                         if len(samples) >= 3:
                             break
-                record.note = "Định dạng chưa hỗ trợ ghi lại. " + " | ".join(samples)
+                record.note = ({"pak": "PAK chưa hỗ trợ giải nén/đóng gói. Cần LOCRES rời hoặc adapter container phù hợp.",
+                               "utoc": "Unreal IoStore UTOC/UCAS chưa hỗ trợ giải nén/đóng gói.",
+                               "ucas": "Unreal IoStore UTOC/UCAS chưa hỗ trợ giải nén/đóng gói.",
+                               "uasset": "UASSET có thể chứa StringTable/FText; chưa hỗ trợ đọc/ghi asset."}.get(record.kind, "Định dạng chưa hỗ trợ ghi lại.")
+                               + " " + " | ".join(samples))
                 entries = []
             record.count = len(entries)
             project.entries.extend(entries)

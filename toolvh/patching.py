@@ -14,6 +14,8 @@ from .model import Project, atomic_write, digest, safe_child
 from .translation import validate
 from .unity import rebuild_unity
 from .addressables import catalog_updates
+from .godot import RESOURCE_EXTENSIONS, rebuild_pack, rebuild_resource
+from .unreal import rebuild_locres
 
 
 def export_csv(project: Project, path: str | Path):
@@ -82,6 +84,12 @@ def export_patch(project: Project, destination: str | Path, progress=lambda text
                 raise ValueError(f"File game đã thay đổi kể từ lần quét: {relative}")
             if record.kind == "unity":
                 modified = rebuild_unity(original, entries)
+            elif record.kind == "locres":
+                modified = rebuild_locres(original, entries)
+            elif record.kind == "pck":
+                modified = rebuild_pack(original, entries)
+            elif "." + record.kind in RESOURCE_EXTENSIONS:
+                modified = rebuild_resource(original, record.kind, entries)
             else:
                 text, encoding = decode_text(original)
                 modified = encode_text(rebuild(text, record.kind, entries), encoding)

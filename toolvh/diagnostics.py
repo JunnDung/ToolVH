@@ -6,7 +6,7 @@ from .model import Project
 def compatibility_report(project: Project):
     deferred = [f for f in project.files if f.kind == "bundle"]
     skipped = [f for f in project.files if f.kind == "skipped"]
-    unsupported = [f for f in project.files if f.note.startswith("Định dạng chưa hỗ trợ")]
+    unsupported = [f for f in project.files if f.note.startswith("Định dạng chưa hỗ trợ") or "chưa hỗ trợ" in f.note or "cần đọc tài nguyên đích" in f.note]
     errors = [f for f in project.files if f.kind == "error" or f.note.startswith("Không đọc được")]
     partial = [f for f in project.files if "thiếu type tree" in f.note]
     selected = [e for e in project.entries if e.enabled]
@@ -37,7 +37,7 @@ def report_text(project: Project):
     if project.scan_revision < 2:
         lines.append("Project dùng bộ quét cũ. Cần quét lại trước khi dịch/xuất bản vá.")
     if r["bundle_files_not_scanned"]:
-        lines.append(f"Còn {r['bundle_files_not_scanned']} bundle chưa đọc → bật Quét sâu bundle.")
+        lines.append(f"Còn {r['bundle_files_not_scanned']} bundle/PCK chưa đọc → bật Quét sâu bundle / PCK.")
     if r["oversized_files"]:
         lines.append(f"{r['oversized_files']} file vượt giới hạn → tăng giới hạn quét trong Cấu hình.")
     if r["unsupported_files"]:

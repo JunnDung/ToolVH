@@ -1,10 +1,12 @@
 # ToolVH
 
-Tool GUI trên Windows để quét text tiếng Anh trong thư mục game, dịch sang tiếng Việt, duyệt bản dịch và tạo/cài bản vá có backup. Phiên bản **0.5.5**. Mã nguồn theo [Apache-2.0](LICENSE).
+Tool GUI trên Windows để quét text tiếng Anh trong thư mục game, dịch sang tiếng Việt, duyệt bản dịch và tạo/cài bản vá có backup. Phiên bản **0.6.0**. Mã nguồn theo [Apache-2.0](LICENSE).
 
 ## Khả năng
 
 - Đọc JSON, CSV/TSV, XML, INI, TXT và phụ đề SRT.
+- Godot: đọc/ghi PCK rời không mã hóa v1–v3; đọc CSV/JSON, gettext PO/MO, TSCN và Translation TRES dạng text bên trong hoặc ngoài PCK.
+- Unreal Engine: đọc/ghi LOCRES rời v0–v3, giữ nguyên namespace, key và hash nguồn; không đổi text của locale khác.
 - Đọc Unity TextAsset và bảng Localization StringTable có type tree; ưu tiên nguồn tiếng Anh, bỏ metadata kỹ thuật và đánh dấu mục chưa chắc chắn để duyệt.
 - Dịch qua Gemini, Groq, OpenRouter free, API tương thích OpenAI, Ollama hoặc Google Dịch web thử nghiệm.
 - Glossary, hướng dẫn văn phong, bảo vệ biến/thẻ định dạng, tự lưu từng lô, xuất/nhập CSV.
@@ -12,6 +14,24 @@ Tool GUI trên Windows để quét text tiếng Anh trong thư mục game, dịc
 - Chuyển sang game khác để quét ngay, giữ bản Việt hóa và backup của game cũ.
 
 Không hỗ trợ tự động mọi engine hoặc mọi bản game. Container thiếu type tree, catalog JSON/remote/cache chưa hỗ trợ sẽ cần adapter riêng. Bộ quét và model dịch không bảo đảm mọi câu đúng ngữ cảnh; cần duyệt câu nguồn, bản dịch, font và bố cục trong game.
+
+## Godot và Unreal Engine
+
+| Engine / định dạng | Quét và cài bản dịch |
+|---|---|
+| Godot PCK rời v1/v2/v3, không mã hóa | Bật **Quét sâu bundle / PCK**. Locator ghi cả tên member và vị trí text. Cài lại PCK với offset, kích thước, MD5 mới; giữ nguyên asset khác. |
+| Godot TSCN | Chỉ lấy `text`, `placeholder_text`, `tooltip_text`; không sửa tên node, đường dẫn, script. Thiếu locale thì đưa vào Cần duyệt. |
+| Godot Translation TRES / .translation dạng text | Dịch giá trị trong `messages`, giữ key và locale gốc. |
+| Gettext PO/MO UTF-8 | Dịch message đơn; giữ msgid, context, header. Bỏ qua plural, fuzzy, obsolete; MO giữ byte order. |
+| Unreal LOCRES rời v0/v1/v2/v3 | Tự đọc khi quét; ưu tiên đường dẫn locale `en`/`en-US`. Giữ hash nguồn để engine không bỏ bản dịch. Chuỗi dùng chung được tách theo key khi chỉ sửa một mục. |
+
+Chọn thư mục game → quét → duyệt nguồn tiếng Anh → dịch thử → đóng game → **Cài vào game**. Tool tạo backup trước khi ghi PCK/LOCRES; **Khôi phục** trả file về đúng byte gốc. Giữ English trong game khi vá bảng English. Mọi provider dịch hiện có dùng được cho các adapter mới.
+
+**Chưa hỗ trợ:** PCK mã hóa/sparse/v4 hoặc nhúng trong EXE; Godot RSRC/RSCC/OptimizedTranslation và scene binary; Unreal PAK/IoStore (`.utoc`, `.ucas`) và StringTable/FText trong UASSET. Không tự đổi đuôi hoặc vá byte thô ở các định dạng này. CSV/PO có `.import`/`.remap` được bỏ qua vì engine đọc tài nguyên đã nhập, không đọc file nguồn; báo cáo ghi rõ file chưa hỗ trợ. Tên engine là nhận diện định dạng, không bảo đảm toàn bộ game đã được hỗ trợ.
+
+Bộ kiểm thử có dữ liệu tổng hợp cho các phiên bản PCK/LOCRES, chuỗi dùng chung, Unicode, gettext, cài/khôi phục, file sai offset/MD5 và gói mã hóa. Chưa xác nhận trên game Godot/Unreal thương mại; font và việc game nạp đúng file phải kiểm tra thực tế.
+
+Tham khảo định dạng: [Godot PCK reader](https://github.com/godotengine/godot/blob/4.5/core/io/file_access_pack.cpp), [Godot gettext](https://docs.godotengine.org/en/stable/tutorials/i18n/localization_using_gettext.html), [UnrealLocres format implementation](https://github.com/akintos/UnrealLocres/blob/master/LocresLib/LocresFile.cs). Adapter được viết riêng, không kèm mã thư viện hoặc asset game.
 
 ## Cài từ mã nguồn
 
@@ -72,11 +92,12 @@ Kiểm thử dùng dữ liệu tổng hợp và mock API; không cần game thư
 .\Build.ps1
 ```
 
-Kết quả ở `dist/0.5.5/ToolVH`; giữ toàn bộ thư mục cùng `_internal`. Build dùng `packaging/ToolVH.spec`, loại ICU lấy nhầm từ PATH để Qt dùng ICU Windows. Thư mục dist và runtime không được commit vào mã nguồn.
+Kết quả ở `dist/0.6.0/ToolVH`; giữ toàn bộ thư mục cùng `_internal`. Build dùng `packaging/ToolVH.spec`, loại ICU lấy nhầm từ PATH để Qt dùng ICU Windows. Thư mục dist và runtime không được commit vào mã nguồn.
 
 ## Cấu trúc
 
 - `toolvh/scanner.py`, `formats.py`, `unity.py`: nhận diện, đọc/ghi text theo locator.
+- `toolvh/godot.py`, `unreal.py`: PCK, tài nguyên Godot/gettext và LOCRES.
 - `toolvh/addressables.py`: đọc catalog và tính/cập nhật CRC payload UnityFS.
 - `toolvh/translation.py`: provider, chia lô, glossary, kiểm tra biến.
 - `toolvh/model.py`, `patching.py`: project, CSV, staging, backup và cài/khôi phục.

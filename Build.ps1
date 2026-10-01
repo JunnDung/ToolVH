@@ -1,4 +1,4 @@
-param([string]$OutputDirectory = 'dist\0.5.5')
+param([string]$OutputDirectory = 'dist\0.6.0')
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 & '.\.venv\Scripts\python.exe' -m PyInstaller --noconfirm --distpath $OutputDirectory packaging/ToolVH.spec
