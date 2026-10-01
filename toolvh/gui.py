@@ -1,0 +1,1028 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+import threading
+from pathlib import Path
+
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QObject, QSortFilterProxyModel, Qt, QThread, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QDesktopServices
+from PySide6.QtWidgets import (
+    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
+    QPushButton, QSpinBox, QSplitter, QTabWidget, QTableView, QTreeWidget, QTreeWidgetItem,
+    QVBoxLayout, QWidget, QGridLayout, QScrollArea,
+)
+
+from .model import Project
+from .patching import export_csv, export_patch, import_csv, install_patch, apply_project, restore_project
+from .scanner import scan
+from .translation import APIConfig, Client, PROVIDERS, translate, validate, environment_key
+from .settings import SettingsStore
+from .diagnostics import report_text, compatibility_report
+
+STYLE = """
+QWidget { background: #101720; color: #e4eaf1; font-family: 'Segoe UI'; font-size: 13px; }
+QMainWindow { background: #101720; }
+QLabel#title { font-size: 28px; font-weight: 700; color: #f6fafc; }
+QLabel#muted { color: #92a6ba; }
+QLabel#metric { font-size: 15px; color: #71e0c4; padding: 12px; background: #182633; border-radius: 7px; }
+QFrame#card { background: #192633; border: 1px solid #304555; border-radius: 9px; }
+QFrame#card QLabel { background: transparent; }
+QLabel#step { font-size: 18px; font-weight: 600; color: #71e0c4; }
+QPushButton { background: #243445; border: 1px solid #35495c; padding: 8px 14px; border-radius: 5px; }
+QPushButton:hover { background: #30495f; }
+QPushButton:disabled { color: #637487; background: #18222d; }
+QPushButton#primary { background: #197b6b; border-color: #279f87; font-weight: 600; }
+QPushButton#primary:hover { background: #239b85; }
+QLineEdit, QPlainTextEdit, QSpinBox, QComboBox { background: #192532; border: 1px solid #34485a; padding: 7px; border-radius: 4px; selection-background-color: #246d68; }
+QTableView, QTreeWidget { background: #131e29; alternate-background-color: #172430; border: 1px solid #2c3c4c; gridline-color: #263747; selection-background-color: #25574f; }
+QHeaderView::section { background: #20303f; color: #b9cbd9; padding: 8px; border: 0; border-right: 1px solid #314455; }
+QTabWidget::pane { border: 1px solid #2c3e50; border-radius: 6px; }
+QTabBar::tab { background: #172430; padding: 11px 24px; color: #93aabd; }
+QTabBar::tab:selected { color: #7ce0c8; background: #233544; border-bottom: 2px solid #48c9aa; }
+QProgressBar { border: none; background: #203040; height: 5px; }
+QProgressBar::chunk { background: #48c9aa; }
+QToolTip { background: #243445; color: white; border: 1px solid #466178; }
+QSplitter::handle { background: #101720; width: 8px; height: 8px; }
+"""
+
+
+class EntriesModel(QAbstractTableModel):
+    changed = Signal()
+    HEADERS = ["Dịch", "Text gốc", "Tiếng Việt", "Vị trí / ngữ cảnh", "Nguồn"]
+
+    def __init__(self):
+        super().__init__()
+        self.entries = []
+
+    def set_entries(self, entries):
+        self.beginResetModel()
+        self.entries = entries
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.entries)
+
+    def columnCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else 5
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if role == Qt.DisplayRole and orientation == Qt.Horizontal:
+            return self.HEADERS[section]
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid():
+            return None
+        e = self.entries[index.row()]
+        col = index.column()
+        if role == Qt.CheckStateRole and col == 0:
+            return Qt.Checked if e.enabled else Qt.Unchecked
+        if role == Qt.DisplayRole:
+            return ["", e.source.replace("\n", " ↵ "), e.translation.replace("\n", " ↵ "), e.context, e.source_locale.upper() or "Cần duyệt"][col]
+        if role == Qt.ToolTipRole:
+            return e.error or f"{e.file}\n{e.context}\n{e.detection or 'Project cũ — cần quét lại'}\n\n{e.source}"
+        if role == Qt.ForegroundRole and e.error:
+            return QColor("#ffa3a3")
+        if role == Qt.ForegroundRole and col == 2 and e.translation:
+            return QColor("#78ddbc")
+
+    def flags(self, index):
+        flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+        return flags | Qt.ItemIsUserCheckable if index.column() == 0 else flags
+
+    def setData(self, index, value, role=Qt.EditRole):
+        if role == Qt.CheckStateRole and index.column() == 0:
+            self.entries[index.row()].enabled = value == Qt.Checked.value
+            self.dataChanged.emit(index, index, [role])
+            self.changed.emit()
+            return True
+        return False
+
+
+class TextFilter(QSortFilterProxyModel):
+    text = ""
+    file = ""
+    state = "Tất cả"
+
+    def filterAcceptsRow(self, row, parent):
+        e = self.sourceModel().entries[row]
+        if self.file and e.file != self.file:
+            return False
+        if self.text and self.text not in (e.source + e.translation + e.context + e.file).casefold():
+            return False
+        return (self.state == "Tất cả" or self.state == "Đã chọn" and e.enabled
+                or self.state == "Chưa dịch" and e.enabled and not e.translation
+                or self.state == "Đã dịch" and bool(e.translation)
+                or self.state == "Cần duyệt" and (not e.source_locale or "chưa xác nhận" in e.detection)
+                or self.state == "Có lỗi" and bool(e.error))
+
+
+class Worker(QObject):
+    message = Signal(str)
+    result = Signal(object)
+    error = Signal(str)
+    finished = Signal()
+
+    def __init__(self, function):
+        super().__init__()
+        self.function = function
+
+    def run(self):
+        try:
+            self.result.emit(self.function(self.message.emit))
+        except Exception as exc:
+            self.error.emit(f"{type(exc).__name__}: {exc}")
+        finally:
+            self.finished.emit()
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, project_path=None, settings_path=None):
+        super().__init__()
+        self.project = None
+        self.project_path = None
+        self.busy = False
+        self.dirty = False
+        self.stop = threading.Event()
+        self.settings_store = SettingsStore(settings_path)
+        self.profiles, self.recent, self.active_provider = {}, [], None
+        self.verified_api = None
+        self.setWindowTitle("ToolVH 0.5.5 · Việt hóa game")
+        self.resize(1420, 940)
+        self.setMinimumSize(1060, 740)
+        base = QWidget()
+        self.setCentralWidget(base)
+        outer = QVBoxLayout(base)
+        outer.setContentsMargins(24, 20, 24, 16)
+        title_row = QHBoxLayout()
+        title = QLabel("ToolVH  /  Việt hóa game")
+        title.setObjectName("title")
+        title_row.addWidget(title)
+        title_row.addStretch()
+        self.open_btn = self.button("Mở project", self.open_project)
+        self.save_btn = self.button("Lưu project", self.save_project)
+        title_row.addWidget(self.open_btn)
+        title_row.addWidget(self.save_btn)
+        outer.addLayout(title_row)
+        subtitle = QLabel("Tìm dữ liệu  →  Kiểm tra text  →  Dịch tiếng Việt  →  Xuất bản vá")
+        subtitle.setObjectName("muted")
+        outer.addWidget(subtitle)
+
+        self.tabs = QTabWidget()
+        outer.addWidget(self.tabs, 1)
+        self.home_page = self.build_home()
+        self.tabs.addTab(self.home_page, "Bắt đầu")
+        scan_tab = QWidget()
+        self.workspace_page = scan_tab
+        layout = QVBoxLayout(scan_tab)
+        layout.setContentsMargins(16, 16, 16, 16)
+        row = QHBoxLayout()
+        self.game_path = QLineEdit()
+        self.game_path.setPlaceholderText("Chọn thư mục cài đặt game…")
+        row.addWidget(self.game_path, 1)
+        row.addWidget(self.button("Chọn game…", self.choose_game))
+        self.deep = QCheckBox("Quét sâu bundle")
+        self.deep.setChecked(True)
+        self.deep.setToolTip("Đọc cả bundle để tìm các bảng ngôn ngữ nằm trong dữ liệu đóng gói. Có thể mất vài phút.")
+        row.addWidget(self.deep)
+        row.addWidget(self.button("Quét dữ liệu", self.start_scan, primary=True))
+        layout.addLayout(row)
+        self.metrics = QLabel("Chưa có project · Chọn thư mục game để bắt đầu")
+        self.metrics.setObjectName("metric")
+        layout.addWidget(self.metrics)
+        search_row = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Tìm text, bản dịch, tên asset hoặc khóa hội thoại…")
+        self.search.textChanged.connect(self.update_filter)
+        search_row.addWidget(self.search, 1)
+        self.state = QComboBox()
+        self.state.addItems(["Tất cả", "Đã chọn", "Chưa dịch", "Đã dịch", "Cần duyệt", "Có lỗi"])
+        self.state.currentTextChanged.connect(self.update_filter)
+        search_row.addWidget(self.state)
+        search_row.addWidget(self.button("Chọn kết quả lọc", lambda: self.enable_visible(True)))
+        search_row.addWidget(self.button("Bỏ chọn kết quả", lambda: self.enable_visible(False)))
+        layout.addLayout(search_row)
+
+        horizontal = QSplitter(Qt.Horizontal)
+        self.files = QTreeWidget()
+        self.files.setHeaderLabels(["File dữ liệu", "Text"])
+        self.files.setColumnWidth(0, 280)
+        self.files.currentItemChanged.connect(self.select_file)
+        horizontal.addWidget(self.files)
+        vertical = QSplitter(Qt.Vertical)
+        self.model = EntriesModel()
+        self.model.changed.connect(self.on_edit)
+        self.proxy = TextFilter()
+        self.proxy.setSourceModel(self.model)
+        self.table = QTableView()
+        self.table.setModel(self.proxy)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(QTableView.SelectRows)
+        self.table.setSelectionMode(QTableView.SingleSelection)
+        self.table.verticalHeader().hide()
+        self.table.verticalHeader().setDefaultSectionSize(34)
+        self.table.setWordWrap(False)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        for col, size in enumerate([48, 290, 270, 350, 75]):
+            self.table.setColumnWidth(col, size)
+        self.table.selectionModel().selectionChanged.connect(self.select_entry)
+        for signal in (self.proxy.rowsRemoved, self.proxy.rowsInserted, self.proxy.layoutChanged):
+            signal.connect(lambda *args: QTimer.singleShot(0, self.select_entry))
+        vertical.addWidget(self.table)
+        editor = QWidget()
+        editor_layout = QVBoxLayout(editor)
+        editor_layout.setContentsMargins(0, 8, 0, 0)
+        self.context = QLabel("Chọn một dòng để xem đầy đủ và chỉnh bản dịch.")
+        self.context.setWordWrap(True)
+        self.context.setObjectName("muted")
+        editor_layout.addWidget(self.context)
+        fields = QHBoxLayout()
+        self.source = QPlainTextEdit()
+        self.source.setReadOnly(True)
+        self.source.setPlaceholderText("Text gốc")
+        self.target = QPlainTextEdit()
+        self.target.setPlaceholderText("Bản dịch tiếng Việt · Giữ nguyên biến và thẻ định dạng")
+        fields.addWidget(self.source)
+        fields.addWidget(self.target)
+        editor_layout.addLayout(fields)
+        edit_actions = QHBoxLayout()
+        self.validation = QLabel("")
+        self.validation.setWordWrap(True)
+        edit_actions.addWidget(self.validation, 1)
+        edit_actions.addWidget(self.button("Lưu câu dịch", self.save_entry, primary=True))
+        editor_layout.addLayout(edit_actions)
+        vertical.addWidget(editor)
+        vertical.setSizes([390, 190])
+        horizontal.addWidget(vertical)
+        horizontal.setSizes([290, 1060])
+        layout.addWidget(horizontal, 1)
+        actions = QHBoxLayout()
+        actions.addWidget(self.button("Xuất CSV", self.export_csv))
+        actions.addWidget(self.button("Nhập CSV", self.import_csv))
+        actions.addStretch()
+        actions.addWidget(self.button("Dịch thử 10 câu", lambda: self.start_translation(limit=10)))
+        actions.addWidget(self.button("Dịch các câu đã chọn", self.start_translation, primary=True))
+        actions.addWidget(self.button("Xuất bản vá…", self.start_export, primary=True))
+        actions.addWidget(self.button("Cài vào game", self.apply_current_project, primary=True))
+        actions.addWidget(self.button("Khôi phục", self.restore_current_project))
+        layout.addLayout(actions)
+        self.tabs.addTab(scan_tab, "01   Dữ liệu / Bản dịch")
+
+        settings = QWidget()
+        settings_layout = QVBoxLayout(settings)
+        settings_layout.setContentsMargins(24, 24, 24, 24)
+        note = QLabel("Có thể quét, sửa tay và xuất CSV khi chưa có API. Khi bấm Dịch, text đã chọn được gửi tới endpoint bên dưới.")
+        note.setWordWrap(True)
+        settings_layout.addWidget(note)
+        form = QFormLayout()
+        self.provider = QComboBox()
+        for key, (label, _) in PROVIDERS.items():
+            self.provider.addItem(label, key)
+        self.endpoint = QLineEdit()
+        self.api_model = QComboBox()
+        self.api_model.setEditable(True)
+        self.api_model.lineEdit().setPlaceholderText("Bấm Tải danh sách model sau khi nhập key, hoặc nhập tên model")
+        model_row = QWidget()
+        model_layout = QHBoxLayout(model_row)
+        model_layout.setContentsMargins(0, 0, 0, 0)
+        model_layout.addWidget(self.api_model, 1)
+        model_layout.addWidget(self.button("Tải danh sách model", self.fetch_models))
+        self.api_key = QLineEdit()
+        self.api_key.setEchoMode(QLineEdit.Password)
+        self.api_key.setPlaceholderText("Dán key tại đây; không cần gửi key vào chat")
+        key_row = QWidget()
+        key_layout = QHBoxLayout(key_row)
+        key_layout.setContentsMargins(0, 0, 0, 0)
+        key_layout.addWidget(self.api_key, 1)
+        self.show_key = QCheckBox("Hiện key")
+        self.show_key.toggled.connect(lambda checked: self.api_key.setEchoMode(QLineEdit.Normal if checked else QLineEdit.Password))
+        key_layout.addWidget(self.show_key)
+        self.remember_key = QCheckBox("Nhớ key trên tài khoản Windows này (mã hóa bằng DPAPI)")
+        self.api_help = QLabel()
+        self.api_help.setWordWrap(True)
+        self.api_help.setOpenExternalLinks(True)
+        settings_layout.addWidget(self.api_help)
+        self.api_status = QLabel("Chưa kiểm tra kết nối.")
+        self.api_status.setWordWrap(True)
+        self.api_status.setObjectName("metric")
+        self.batch_size = QSpinBox()
+        self.batch_size.setRange(1, 100)
+        self.batch_size.setValue(20)
+        self.delay_seconds = QSpinBox()
+        self.delay_seconds.setRange(0, 120)
+        self.delay_seconds.setValue(2)
+        self.delay_seconds.setSuffix(" giây")
+        self.json_mode = QCheckBox("Yêu cầu API trả JSON (tắt nếu endpoint không hỗ trợ)")
+        self.json_mode.setChecked(True)
+        self.instructions = QPlainTextEdit("Dịch tự nhiên, ngắn gọn, phù hợp giao diện và hội thoại game.")
+        self.instructions.setMaximumHeight(100)
+        self.glossary = QPlainTextEdit()
+        self.glossary.setPlaceholderText("Mỗi dòng: thuật ngữ = bản dịch\nChef = Đầu bếp\nOnion King = Vua Hành Tây")
+        self.glossary.setMaximumHeight(180)
+        self.max_mb = QSpinBox()
+        self.max_mb.setRange(1, 4096)
+        self.max_mb.setValue(256)
+        self.max_mb.setSuffix(" MB / file")
+        api_actions_widget = QWidget()
+        api_actions = QHBoxLayout(api_actions_widget)
+        api_actions.setContentsMargins(0, 0, 0, 0)
+        api_actions.addWidget(self.button("Kiểm tra kết nối", self.test_api, primary=True))
+        api_actions.addWidget(self.button("Lưu cấu hình", self.save_api_settings))
+        api_actions.addWidget(self.button("Xóa key đã nhớ", self.forget_key))
+        api_actions.addStretch()
+        for label, widget in [("Dịch vụ", self.provider), ("Base URL", self.endpoint), ("API key", key_row),
+                              ("Lưu key", self.remember_key), ("Model", model_row),
+                              ("Câu mỗi lô", self.batch_size), ("Nghỉ giữa các lô", self.delay_seconds), ("Định dạng", self.json_mode),
+                              ("Văn phong", self.instructions), ("Thuật ngữ", self.glossary), ("Giới hạn quét", self.max_mb)]:
+            form.addRow(label, widget)
+            if label == "Model":
+                form.addRow("", api_actions_widget)
+                form.addRow("Trạng thái", self.api_status)
+        settings_layout.addLayout(form)
+        settings_layout.addStretch()
+        self.settings_page = QScrollArea()
+        self.settings_page.setWidgetResizable(True)
+        self.settings_page.setWidget(settings)
+        self.tabs.addTab(self.settings_page, "02   Google AI / Cấu hình")
+        self.instructions.textChanged.connect(self.on_edit)
+        self.glossary.textChanged.connect(self.on_edit)
+
+        report = QWidget()
+        self.report_page = report
+        report_layout = QVBoxLayout(report)
+        report_layout.setContentsMargins(16, 16, 16, 16)
+        help_text = QLabel("Bản vá được xuất ra thư mục riêng, kèm backup và SHA-256. Đóng game trước khi cài hoặc khôi phục.\n"
+                           "Bản dịch thay vào ngôn ngữ nguồn: nếu dịch cột English, chọn English trong game. Font và bố cục cần kiểm tra trong game.")
+        help_text.setWordWrap(True)
+        report_layout.addWidget(help_text)
+        self.support_report = QLabel("Chưa quét game. Sau khi quét, mức hỗ trợ và phần dữ liệu còn thiếu sẽ hiện ở đây.")
+        self.support_report.setWordWrap(True)
+        self.support_report.setObjectName("metric")
+        report_layout.addWidget(self.support_report)
+        patch_actions = QHBoxLayout()
+        patch_actions.addWidget(self.button("Cài bản vá…", lambda: self.apply_patch(False)))
+        patch_actions.addWidget(self.button("Khôi phục bản gốc…", lambda: self.apply_patch(True)))
+        patch_actions.addWidget(self.button("Xuất chẩn đoán…", self.export_diagnostics))
+        patch_actions.addStretch()
+        report_layout.addLayout(patch_actions)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(3000)
+        report_layout.addWidget(self.log, 1)
+        self.tabs.addTab(report, "03   Báo cáo / Cài đặt")
+
+        footer = QHBoxLayout()
+        self.status = QLabel("Sẵn sàng · File game chỉ thay đổi khi bạn chọn Cài bản vá.")
+        self.status.setObjectName("muted")
+        footer.addWidget(self.status, 1)
+        self.cancel = self.button("Dừng tác vụ", self.cancel_job)
+        self.cancel.setEnabled(False)
+        footer.addWidget(self.cancel)
+        outer.addLayout(footer)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setRange(0, 1)
+        outer.addWidget(self.progress_bar)
+        self.provider.currentIndexChanged.connect(self.change_provider)
+        self.api_model.currentTextChanged.connect(self.api_changed)
+        self.api_key.textChanged.connect(self.api_changed)
+        self.endpoint.textChanged.connect(self.api_changed)
+        self.load_api_settings()
+        if project_path:
+            self.load_project(project_path)
+
+    def build_home(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(24, 20, 24, 20)
+        heading = QLabel("Việt hóa game, từng bước rõ ràng")
+        heading.setObjectName("title")
+        layout.addWidget(heading)
+        intro = QLabel("Chọn thư mục game. Tool tìm nguồn text, giúp bạn dịch và tạo bản vá có thể khôi phục.")
+        intro.setObjectName("muted")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        grid = QGridLayout()
+        steps = [
+            ("01  Chọn game", "Quét thư mục và bundle. Nhận diện engine, bảng ngôn ngữ và các định dạng cần bổ sung bộ đọc.", "Chọn game & quét", self.choose_and_scan),
+            ("02  Kết nối AI", "Dán key Google AI Studio, tải model, kiểm tra một câu mẫu. Có thể nhớ cấu hình cho lần sau.", "Cấu hình Google AI", lambda: self.tabs.setCurrentWidget(self.settings_page)),
+            ("03  Dịch tiếng Việt", "Dịch thử 10 câu trước, xem kết quả rồi dịch tiếp. Tự lưu mỗi lô và dùng lại câu có cùng ngữ cảnh.", "Xem & dịch dữ liệu", lambda: self.tabs.setCurrentWidget(self.workspace_page)),
+            ("04  Xuất và cài bản vá", "Xuất file đã dịch kèm backup. Đóng game để cài, sau đó kiểm tra font và bố cục trong game.", "Bản vá & khôi phục", lambda: self.tabs.setCurrentWidget(self.report_page)),
+        ]
+        for index, (title, description, action, callback) in enumerate(steps):
+            card = QFrame()
+            card.setObjectName("card")
+            box = QVBoxLayout(card)
+            box.setContentsMargins(18, 16, 18, 16)
+            label = QLabel(title)
+            label.setObjectName("step")
+            box.addWidget(label)
+            body = QLabel(description)
+            body.setWordWrap(True)
+            body.setMinimumHeight(48)
+            box.addWidget(body)
+            box.addWidget(self.button(action, callback, primary=index == 0))
+            grid.addWidget(card, index // 2, index % 2)
+        layout.addLayout(grid)
+        self.home_summary = QLabel("Chưa mở project • Bắt đầu bằng Chọn game & quét hoặc Mở project.")
+        self.home_summary.setObjectName("metric")
+        self.home_summary.setWordWrap(True)
+        layout.addWidget(self.home_summary)
+        self.completion = QProgressBar()
+        self.completion.setRange(0, 100)
+        self.completion.setValue(0)
+        self.completion.setTextVisible(False)
+        layout.addWidget(self.completion)
+        recent_row = QHBoxLayout()
+        recent_row.addWidget(QLabel("Project gần đây"))
+        self.recent_combo = QComboBox()
+        self.recent_combo.setMinimumWidth(400)
+        recent_row.addWidget(self.recent_combo, 1)
+        recent_row.addWidget(self.button("Mở lại", self.open_recent))
+        layout.addLayout(recent_row)
+        support = QLabel("Hỗ trợ đọc/ghi: Unity TextAsset, MonoBehaviour có type tree, JSON, CSV/TSV, XML, INI, TXT, SRT.\n"
+                         "Engine riêng, PAK/PCK/RPA, dữ liệu mã hóa hoặc text trong ảnh có thể cần adapter khác. Báo cáo sau khi quét sẽ chỉ rõ phần chưa hỗ trợ.")
+        support.setObjectName("muted")
+        support.setWordWrap(True)
+        layout.addWidget(support)
+        layout.addStretch()
+        return page
+
+    def choose_and_scan(self):
+        path = QFileDialog.getExistingDirectory(self, "Chọn thư mục gốc của game", self.game_path.text())
+        if path:
+            self.game_path.setText(path)
+            self.tabs.setCurrentWidget(self.workspace_page)
+            self.start_scan()
+
+    def open_recent(self):
+        path = self.recent_combo.currentData()
+        if path and self.maybe_save():
+            self.load_project(path)
+
+    def remember_project(self):
+        if not self.project_path:
+            return
+        path = str(self.project_path.resolve())
+        self.recent = [path] + [p for p in self.recent if p != path][:9]
+        self.recent_combo.clear()
+        for p in self.recent:
+            self.recent_combo.addItem(p, p)
+        try:
+            self.settings_store.save(self.active_provider, self.profiles, self.recent)
+        except Exception:
+            self.log.appendPlainText("Chưa lưu được danh sách project gần đây. Project vẫn dùng được.")
+
+    def button(self, text, callback, primary=False):
+        button = QPushButton(text.replace("&", "&&"))
+        if primary:
+            button.setObjectName("primary")
+        button.clicked.connect(callback)
+        return button
+
+    def error(self, message):
+        self.log.appendPlainText(message)
+        self.status.setText("Thao tác thất bại; xem thông báo lỗi.")
+        if "API HTTP" in message:
+            self.verified_api = None
+            self.api_status.setText(message)
+        QMessageBox.warning(self, "ToolVH", message)
+
+    def choose_game(self):
+        path = QFileDialog.getExistingDirectory(self, "Chọn thư mục game", self.game_path.text())
+        if path:
+            self.game_path.setText(path)
+
+    def load_project(self, path):
+        try:
+            project = Project.load(path)
+            self.project_path = Path(path)
+            self.set_project(project)
+            self.dirty = False
+            self.remember_project()
+            self.tabs.setCurrentWidget(self.workspace_page)
+        except Exception as exc:
+            self.error(str(exc))
+
+    def maybe_save(self):
+        if not self.dirty:
+            return True
+        response = QMessageBox.question(self, "Lưu tiến độ", "Lưu thay đổi của project hiện tại?",
+                                        QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        if response == QMessageBox.Cancel:
+            return False
+        return self.save_project() if response == QMessageBox.Save else True
+
+    def open_project(self):
+        if not self.maybe_save():
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Mở project", "", "ToolVH (*.toolvh.json);;JSON (*.json)")
+        if path:
+            self.load_project(path)
+
+    def sync_settings(self):
+        if not self.project:
+            return
+        glossary = {}
+        for line in self.glossary.toPlainText().splitlines():
+            if not line.strip():
+                continue
+            if "=" not in line:
+                raise ValueError("Thuật ngữ phải có dạng: từ gốc = bản dịch")
+            key, value = line.split("=", 1)
+            if not key.strip() or not value.strip():
+                raise ValueError("Thuật ngữ và bản dịch không được để trống.")
+            glossary[key.strip()] = value.strip()
+        self.project.glossary = glossary
+        self.project.instructions = self.instructions.toPlainText()
+
+    def save_project(self):
+        if not self.project:
+            return False
+        try:
+            self.sync_settings()
+            if not self.project_path:
+                path, _ = QFileDialog.getSaveFileName(self, "Lưu project", "game.toolvh.json", "ToolVH (*.toolvh.json)")
+                if not path:
+                    return False
+                self.project_path = Path(path)
+            self.project.save(self.project_path)
+            self.dirty = False
+            self.remember_project()
+            self.status.setText(f"Đã lưu: {self.project_path}")
+            return True
+        except Exception as exc:
+            self.error(str(exc))
+            return False
+
+    def set_project(self, project):
+        self.project = project
+        self.game_path.setText(project.root)
+        self.instructions.setPlainText(project.instructions)
+        self.glossary.setPlainText("\n".join(f"{k} = {v}" for k, v in project.glossary.items()))
+        self.model.set_entries(project.entries)
+        self.search.clear()
+        self.state.setCurrentText("Đã chọn")
+        self.update_filter()
+        self.files.clear()
+        all_files = QTreeWidgetItem(["Tất cả dữ liệu", str(len(project.entries))])
+        all_files.setData(0, Qt.UserRole, "")
+        self.files.addTopLevelItem(all_files)
+        for record in sorted(project.files, key=lambda f: (-f.count, f.path)):
+            if record.count or record.note:
+                item = QTreeWidgetItem([record.path, str(record.count) if record.count else "—"])
+                item.setData(0, Qt.UserRole, record.path)
+                item.setToolTip(0, record.note or record.path)
+                self.files.addTopLevelItem(item)
+        self.files.setCurrentItem(all_files)
+        self.log.setPlainText("Engine: " + ", ".join(project.engines) + "\n\n" + "\n".join(
+            f"{f.path} — {f.count} text. {f.note}" for f in project.files if f.count or f.note))
+        self.update_metrics()
+
+    def update_metrics(self):
+        if self.project:
+            selected = sum(e.enabled for e in self.project.entries)
+            translated = sum(e.enabled and bool(e.translation) for e in self.project.entries)
+            errors = sum(bool(e.error) for e in self.project.entries)
+            self.metrics.setText(f"{' · '.join(self.project.engines)}     |     {len(self.project.entries):,} text ứng viên     |     "
+                                 f"{selected:,} đã chọn     |     {translated:,} đã dịch     |     {errors:,} lỗi")
+            if self.project.scan_revision < 2:
+                self.metrics.setText("Project dùng bộ quét cũ — bấm Quét dữ liệu lại để xác định đúng tiếng Anh; giữ bản dịch khớp nguồn/vị trí.")
+            self.home_summary.setText(f"{Path(self.project.root).name} • {translated:,}/{selected:,} vị trí đã dịch • {selected - translated:,} còn lại\n"
+                                      f"Project: {self.project_path or 'Chưa lưu — bấm Lưu project trước khi dịch'}")
+            self.completion.setValue(round(100 * translated / selected) if selected else 0)
+            self.support_report.setText(report_text(self.project))
+
+    def select_file(self, current, previous):
+        self.proxy.file = current.data(0, Qt.UserRole) if current else ""
+        self.proxy.invalidateFilter()
+        self.select_entry()
+
+    def update_filter(self, *args):
+        self.proxy.text = self.search.text().casefold()
+        self.proxy.state = self.state.currentText()
+        self.proxy.invalidateFilter()
+
+    def current_entry(self):
+        indexes = self.table.selectionModel().selectedRows()
+        if not indexes:
+            return None
+        return self.model.entries[self.proxy.mapToSource(indexes[0]).row()]
+
+    def select_entry(self, *args):
+        entry = self.current_entry()
+        self.editor_entry = entry
+        self.source.setPlainText(entry.source if entry else "")
+        self.target.setPlainText(entry.translation if entry else "")
+        self.context.setText(f"{entry.file}  /  {entry.context}" if entry else "Chọn một dòng để chỉnh bản dịch.")
+        self.validation.setText(entry.error if entry else "")
+
+    def save_entry(self):
+        entry = self.current_entry()
+        if not entry:
+            return
+        if entry is not getattr(self, "editor_entry", None):
+            self.select_entry()
+            return
+        text = self.target.toPlainText()
+        errors = validate(entry.source, text) if text else []
+        if errors:
+            self.validation.setText(" ".join(errors))
+            return
+        entry.translation, entry.error = text, ""
+        self.model.layoutChanged.emit()
+        self.on_edit()
+        self.validation.setText("Đã cập nhật câu dịch." + (" Bản dịch dài hơn 1,7 lần; kiểm tra bố cục." if len(text) > max(30, len(entry.source) * 1.7) else ""))
+
+    def on_edit(self):
+        self.dirty = self.project is not None
+        self.update_metrics()
+
+    def enable_visible(self, enabled):
+        entries = [self.model.entries[self.proxy.mapToSource(self.proxy.index(i, 0)).row()] for i in range(self.proxy.rowCount())]
+        for entry in entries:
+            entry.enabled = enabled
+        self.model.layoutChanged.emit()
+        self.update_filter()
+        self.on_edit()
+
+    def start_scan(self):
+        if not self.maybe_save():
+            return
+        root, deep, max_mb = self.game_path.text(), self.deep.isChecked(), self.max_mb.value()
+        if self.project and self.project.applied_patch and Path(root).resolve() == Path(self.project.root).resolve():
+            return self.error("Khôi phục bản gốc trước khi quét lại game đã cài bản dịch.")
+        previous = self.project
+        def success(project):
+            from .scanner import carry_translations
+            carry_translations(previous, project)
+            self.project_path = None
+            self.set_project(project)
+            self.dirty = True
+        self.run_job(lambda progress: scan(root, progress, self.stop.is_set, deep, max_mb), success)
+
+    def change_provider(self, index):
+        if self.active_provider:
+            self.profiles[self.active_provider] = (self.api_config(provider=self.active_provider), self.remember_key.isChecked())
+        provider = self.provider.currentData()
+        self.active_provider = provider
+        default_key = environment_key(provider)
+        config, remember = self.profiles.get(provider, (APIConfig(provider=provider, base_url=PROVIDERS[provider][1], api_key=default_key), False))
+        self.endpoint.setText(config.base_url)
+        self.endpoint.setReadOnly(provider in ("gemini", "google-web", "groq", "openrouter-free"))
+        self.api_model.clear()
+        self.api_model.setEditText(config.model)
+        self.api_key.setText(config.api_key)
+        self.show_key.setChecked(False)
+        self.remember_key.setChecked(remember)
+        self.batch_size.setValue(config.batch_size)
+        if provider == "ollama":
+            self.batch_size.setValue(min(config.batch_size, 5))
+        self.delay_seconds.setValue(config.delay_seconds)
+        if provider in ("groq", "openrouter-free") and provider not in self.profiles:
+            self.batch_size.setValue(5)
+            self.delay_seconds.setValue(4)
+        self.json_mode.setChecked(config.json_mode)
+        web = provider == "google-web"
+        for widget in (self.api_key, self.show_key, self.remember_key, self.api_model, self.batch_size, self.json_mode):
+            widget.setEnabled(not web)
+        if web:
+            self.api_key.clear()
+            self.remember_key.setChecked(False)
+            self.api_model.setEditText("Không cần model")
+            self.batch_size.setValue(1)
+            self.delay_seconds.setValue(max(2, config.delay_seconds))
+        if provider == "gemini":
+            self.api_help.setText('1. Mở <a style="color:#71e0c4" href="https://aistudio.google.com/api-keys">Google AI Studio → API keys</a> và tạo/copy key. '
+                                 '2. Dán key bên dưới. 3. Tải danh sách model, chọn model dịch văn bản và Kiểm tra kết nối. '
+                                 'Kiểm tra sẽ gửi một câu mẫu; danh sách model chưa bảo đảm tài khoản còn quota. '
+                                 'HTTP 402: mở AI Studio → Billing kiểm tra số dư Prepay. Key đúng không bảo đảm tài khoản có credits.')
+        elif provider == "groq":
+            self.api_help.setText('Groq có Free Plan với hạn mức tùy model/tài khoản. '
+                'Tạo key tại <a style="color:#71e0c4" href="https://console.groq.com/keys">Groq Console → API keys</a>, '
+                'dán key, Tải danh sách model rồi Kiểm tra kết nối. '
+                'Tool không xác định được tài khoản đang Free hay trả phí; kiểm tra Plan/Billing trong Groq trước khi dịch. '
+                'Chạm 429: kiểm tra Limits, giảm lô hoặc tiếp tục khi quota phục hồi. Không tự chuyển dịch vụ/model.')
+        elif provider == "openrouter-free":
+            self.api_help.setText('Tạo key tại <a style="color:#71e0c4" href="https://openrouter.ai/settings/keys">OpenRouter → Keys</a>, '
+                'dán key rồi Tải danh sách model. Preset chỉ hiện model :free có giá input/output bằng 0 và đầu ra text; chặn chọn model trả phí. '
+                'Free có giới hạn theo tài khoản, model có thể bận hoặc ngừng cung cấp. '
+                'Tắt JSON mode nếu model không hỗ trợ; kết quả vẫn phải đúng JSON. Kiểm tra kết nối dùng một lượt gọi dịch.')
+        elif provider == "google-web":
+            self.api_help.setText("Google Dịch web: không cần key/model. Dịch English → Vietnamese, lưu từng câu, nghỉ tối thiểu 2 giây mỗi yêu cầu. "
+                                 "Dịch từng câu, không dùng văn phong/thuật ngữ/ngữ cảnh của project; cần duyệt lại từ đa nghĩa. "
+                                 "Endpoint web thử nghiệm có thể bị giới hạn hoặc thay đổi; không bảo đảm miễn phí vô hạn. "
+                                 "Không dùng glossary/hướng dẫn/ngữ cảnh như Gemini. Bấm Kiểm tra kết nối rồi Dịch thử 10 câu.")
+        elif provider == "ollama":
+            self.api_help.setText("Khởi động Ollama, Tải danh sách model rồi chọn model trên máy. URL: http://localhost:11434. "
+                                  "Tool dùng tối đa 5 câu/lô, tắt suy luận, context 8192 và chờ tối thiểu 300 giây khi tải model. "
+                                  "Bật JSON mode để ràng buộc cấu trúc. Dịch thử 10 câu và duyệt chất lượng trước khi dịch cả game.")
+        else:
+            self.api_help.setText("Nhập Base URL, model và key của nhà cung cấp. URL dừng ở /v1 hoặc đường dẫn API tương thích, không thêm /chat/completions.")
+        self.api_changed()
+
+    def api_config(self, provider=None):
+        return APIConfig(provider or self.provider.currentData(), self.endpoint.text().strip(),
+                         self.api_model.currentText().strip(), self.api_key.text().strip(),
+                         self.batch_size.value(), json_mode=self.json_mode.isChecked(),
+                         delay_seconds=self.delay_seconds.value())
+
+    def api_changed(self, *args):
+        self.verified_api = None
+        self.api_status.setText("Chưa kiểm tra cấu hình này • Chọn model rồi bấm Kiểm tra kết nối.")
+        if self.provider.currentData() == "google-web":
+            self.api_status.setText("Không cần key/model • Bấm Kiểm tra kết nối. Endpoint web thử nghiệm có thể bị giới hạn.")
+
+    def load_api_settings(self):
+        try:
+            data = self.settings_store.load()
+            self.profiles, self.recent = data["profiles"], data["recent"]
+            selected = data["provider"] if data["provider"] in PROVIDERS else "gemini"
+            if data["key_errors"]:
+                self.log.appendPlainText("Không mở được key cũ của: " + ", ".join(data["key_errors"]) + ". Hãy dán lại key.")
+        except Exception:
+            selected = "gemini"
+            self.log.appendPlainText("Không đọc được cấu hình đã lưu. Hãy cấu hình API lại.")
+        self.provider.blockSignals(True)
+        self.provider.setCurrentIndex(self.provider.findData(selected))
+        self.provider.blockSignals(False)
+        self.change_provider(self.provider.currentIndex())
+        for path in self.recent:
+            self.recent_combo.addItem(path, path)
+
+    def save_api_settings(self):
+        try:
+            config = self.api_config()
+            Client(config, require_model=False)
+            self.profiles[config.provider] = (config, self.remember_key.isChecked())
+            self.settings_store.save(config.provider, self.profiles, self.recent)
+            self.api_status.setText("Đã lưu cấu hình. " + ("Key được mã hóa cho tài khoản Windows hiện tại." if self.remember_key.isChecked() else "Key chỉ giữ trong phiên này.") + " Bấm Kiểm tra kết nối để xác nhận dịch được.")
+        except Exception as exc:
+            self.error(str(exc))
+
+    def forget_key(self):
+        self.api_key.clear()
+        self.remember_key.setChecked(False)
+        self.profiles[self.active_provider] = (self.api_config(), False)
+        try:
+            self.settings_store.save(self.active_provider, self.profiles, self.recent)
+            self.api_status.setText("Đã xóa key đã nhớ của dịch vụ hiện tại.")
+        except Exception as exc:
+            self.error(str(exc))
+
+    def fetch_models(self):
+        if self.provider.currentData() == "google-web":
+            self.api_status.setText("Google Dịch web không dùng model. Bấm Kiểm tra kết nối để thử dịch.")
+            return
+        try:
+            client = Client(self.api_config(), require_model=False)
+        except Exception as exc:
+            return self.error(str(exc))
+        previous = self.api_model.currentText()
+        def success(models):
+            self.api_model.clear()
+            self.api_model.addItems(models)
+            self.api_model.setCurrentText(previous if previous in models else models[0] if models else "")
+            self.api_status.setText(f"Đã tìm thấy {len(models)} model. Chọn model rồi Kiểm tra kết nối để xác nhận quyền dịch và quota." if models else "Không tìm thấy model dịch văn bản. Kiểm tra project/key hoặc nhập tên model trực tiếp.")
+        self.run_job(lambda progress: client.list_models(self.stop), success)
+
+    def test_api(self):
+        try:
+            config = self.api_config()
+            client = Client(config)
+        except Exception as exc:
+            return self.error(str(exc))
+        def success(translation):
+            self.verified_api = (config.provider, config.base_url, config.model, config.api_key)
+            self.api_status.setText(f"Kết nối và sinh bản dịch thành công • {config.model}\nStart game → {translation}")
+        self.run_job(lambda progress: client.test_connection(self.stop), success)
+
+    def start_translation(self, checked=False, limit=None):
+        if not self.project:
+            return self.error("Hãy quét game hoặc mở project trước.")
+        if self.project.scan_revision < 2:
+            return self.error("Bấm Quét dữ liệu lại trước khi dịch project cũ. Tool sẽ giữ bản dịch có cùng nguồn và vị trí.")
+        try:
+            config = self.api_config()
+            Client(config)
+        except Exception as exc:
+            self.tabs.setCurrentWidget(self.settings_page)
+            return self.error(str(exc))
+        if not any(e.enabled and not e.translation for e in self.project.entries):
+            return QMessageBox.information(self, "Dịch tiếng Việt", "Không còn câu chưa dịch trong các mục đã chọn.")
+        if not self.save_project():
+            return
+        project, path = self.project, self.project_path
+        self.run_job(lambda progress: translate(project, config, progress, self.stop, lambda: project.save(path), limit=limit),
+                     lambda count: self.translation_finished(count))
+
+    def translation_finished(self, count):
+        self.dirty = False
+        self.model.layoutChanged.emit()
+        self.update_metrics()
+        self.select_entry()
+        self.status.setText(f"Đã lưu {count:,} vị trí dịch trong lượt này. Có thể xem bộ lọc Đã dịch hoặc Có lỗi.")
+
+    def export_diagnostics(self):
+        if not self.project:
+            return self.error("Hãy quét game hoặc mở project trước.")
+        path, _ = QFileDialog.getSaveFileName(self, "Xuất báo cáo hỗ trợ engine", "game-diagnostics.json", "JSON (*.json)")
+        if path:
+            try:
+                from .model import atomic_write
+                atomic_write(Path(path), json.dumps(compatibility_report(self.project), ensure_ascii=False, indent=2).encode("utf-8"))
+                self.status.setText(f"Đã xuất báo cáo: {path}")
+            except Exception as exc:
+                self.error(str(exc))
+
+    def export_csv(self):
+        if not self.project:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Xuất text", "translations.csv", "CSV (*.csv)")
+        if path:
+            try:
+                export_csv(self.project, path)
+                self.status.setText(f"Đã xuất {len(self.project.entries):,} dòng: {path}")
+            except Exception as exc:
+                self.error(str(exc))
+
+    def import_csv(self):
+        if not self.project:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Nhập bản dịch", "", "CSV (*.csv)")
+        if path:
+            try:
+                count = import_csv(self.project, path)
+                self.model.layoutChanged.emit()
+                self.on_edit()
+                self.select_entry()
+                self.status.setText(f"Đã nhập {count:,} dòng.")
+            except Exception as exc:
+                self.error(str(exc))
+
+    def start_export(self):
+        if not self.project:
+            return
+        if self.project.scan_revision < 2:
+            return self.error("Bấm Quét dữ liệu lại trước khi xuất bản vá từ project cũ.")
+        parent = QFileDialog.getExistingDirectory(self, "Chọn nơi chứa bản vá (ngoài thư mục game)")
+        if not parent:
+            return
+        from datetime import datetime
+        destination = Path(parent) / ("ToolVH-patch-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
+        self.run_job(lambda progress: export_patch(self.project, destination, progress),
+                     lambda result: QMessageBox.information(self, "Đã xuất bản vá", f"{destination}\n\nĐã dịch {result['translated']} câu; còn thiếu {result['remaining']} câu đã chọn.\nMở tab Báo cáo & cài đặt để cài thử."), cancellable=False)
+
+    def apply_current_project(self):
+        if not self.project:
+            return self.error("Hãy quét game và dịch các câu cần thiết trước.")
+        try:
+            self.project.require_current_scan()
+            if self.project.applied_patch:
+                raise ValueError("Khôi phục bản gốc trước khi cài bản dịch mới.")
+        except Exception as exc:
+            return self.error(str(exc))
+        translated = sum(e.enabled and bool(e.translation) for e in self.project.entries)
+        if not translated:
+            return self.error("Chưa có bản dịch được chọn để cài.")
+        if not self.save_project():
+            return
+        if QMessageBox.question(self, "Cài trực tiếp vào game",
+            f"Cài {translated} vị trí đã dịch vào:\n{self.project.root}\n\nĐóng game trước khi cài. Tool sẽ tạo backup để khôi phục.") != QMessageBox.Yes:
+            return
+        import uuid
+        destination = self.settings_store.path.parent / "patches" / uuid.uuid4().hex
+        project, path = self.project, self.project_path
+        self.run_job(lambda progress: apply_project(project, destination, progress, lambda: project.save(path)),
+            lambda result: QMessageBox.information(self, "Đã cài tiếng Việt",
+                f"Đã cài {result['files']} file / {result['translated']} vị trí.\nChọn English trong game và kiểm tra font.\nBackup: {result['patch']}"), cancellable=False)
+
+    def restore_current_project(self):
+        if not self.project or not self.project.applied_patch:
+            return self.error("Project chưa có bản vá đã cài; dùng Báo cáo / Cài đặt → Khôi phục bản gốc nếu có thư mục bản vá riêng.")
+        if not self.save_project():
+            return
+        if QMessageBox.question(self, "Khôi phục game", f"Đóng game rồi khôi phục bản gốc tại:\n{self.project.root}") != QMessageBox.Yes:
+            return
+        project, path = self.project, self.project_path
+        self.run_job(lambda progress: restore_project(project, lambda: project.save(path)),
+            lambda count: QMessageBox.information(self, "Đã khôi phục", f"Đã khôi phục {count} file game."), cancellable=False)
+
+    def apply_patch(self, restore):
+        patch = QFileDialog.getExistingDirectory(self, "Chọn thư mục bản vá có manifest.json")
+        if not patch:
+            return
+        game = QFileDialog.getExistingDirectory(self, "Chọn thư mục game cần áp dụng", self.game_path.text())
+        if not game:
+            return
+        action = "Khôi phục bản gốc" if restore else "Cài bản vá"
+        if QMessageBox.question(self, action, f"Đã đóng game?\n\n{action} vào:\n{game}\n\nTool sẽ kiểm tra phiên bản file trước khi ghi.") != QMessageBox.Yes:
+            return
+        self.run_job(lambda progress: install_patch(patch, game, restore),
+                     lambda count: QMessageBox.information(self, action, f"Hoàn tất {count} file."), cancellable=False)
+
+    def cancel_job(self):
+        self.stop.set()
+        self.cancel.setEnabled(False)
+        self.status.setText("Đang dừng sau thao tác hiện tại; API đang chờ có thể mất tối đa 120 giây.")
+
+    def run_job(self, function, success, cancellable=True):
+        if self.busy:
+            return
+        self.busy = True
+        self.stop.clear()
+        self.tabs.setEnabled(False)
+        self.open_btn.setEnabled(False)
+        self.save_btn.setEnabled(False)
+        self.cancel.setEnabled(cancellable)
+        self.progress_bar.setRange(0, 0)
+        self.status.setText("Đang xử lý…")
+        self.thread = QThread(self)
+        self.worker = Worker(function)
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.message.connect(self.job_message)
+        self.job_callback = success
+        self.worker.result.connect(self.job_success)
+        self.worker.error.connect(self.error)
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.job_finished)
+        self.thread.finished.connect(self.thread.deleteLater)
+        self.thread.start()
+
+    @Slot(object)
+    def job_success(self, result):
+        try:
+            self.status.setText("Tác vụ hoàn tất.")
+            self.job_callback(result)
+        except Exception as exc:
+            self.error(str(exc))
+
+    @Slot(str)
+    def job_message(self, text):
+        self.status.setText(text)
+        self.log.appendPlainText(text)
+        match = re.match(r"\[(\d+)/(\d+)\]", text)
+        if match and int(match[2]) > 0:
+            self.progress_bar.setRange(0, int(match[2]))
+            self.progress_bar.setValue(int(match[1]))
+
+    def job_finished(self):
+        self.busy = False
+        self.tabs.setEnabled(True)
+        self.open_btn.setEnabled(True)
+        self.save_btn.setEnabled(True)
+        self.cancel.setEnabled(False)
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(1)
+        self.model.layoutChanged.emit()
+        self.update_metrics()
+
+    def closeEvent(self, event):
+        if self.busy:
+            self.error("Hãy dừng hoặc chờ tác vụ hiện tại hoàn tất trước khi đóng.")
+            event.ignore()
+        elif not self.maybe_save():
+            event.ignore()
+        else:
+            event.accept()
+
+
+def configure_app(app):
+    # Also register the installed font explicitly for offscreen QA and systems
+    # where Qt's font enumeration is unavailable. No font is redistributed.
+    font = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "segoeui.ttf"
+    if font.exists():
+        QFontDatabase.addApplicationFont(str(font))
+    app.setStyle("Fusion")
+    app.setStyleSheet(STYLE)
+    app.setFont(QFont("Segoe UI", 10))
+
+
+def run(project_path=None, smoke_report=None):
+    app = QApplication.instance() or QApplication(sys.argv)
+    configure_app(app)
+    window = MainWindow(project_path)
+    window.show()
+    if smoke_report:
+        def finish_smoke():
+            from . import __version__
+            from .model import atomic_write
+            path = Path(smoke_report)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            image_path = path.with_suffix(".png")
+            saved = window.grab().save(str(image_path))
+            atomic_write(path, json.dumps({"version": __version__, "tabs": window.tabs.count(),
+                         "providers": [window.provider.itemData(i) for i in range(window.provider.count())],
+                         "project_entries": len(window.project.entries) if window.project else 0,
+                         "selected_entries": sum(e.enabled for e in window.project.entries) if window.project else 0,
+                         "screenshot_saved": saved, "network_called": False}, indent=2).encode())
+            window.dirty = False
+            window.close()
+            app.quit()
+        QTimer.singleShot(300, finish_smoke)
+    return app.exec()

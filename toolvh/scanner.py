@@ -1,0 +1,132 @@
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+
+from .formats import TEXT_EXTENSIONS, decode_text, extract, runtime_metadata
+from .model import FileRecord, Project, digest
+from .unity import extract_unity, resolve_table_entries
+
+SKIP_DIRS = {".git", ".venv", "node_modules", "__pycache__", "mono", "managed"}
+BINARY_EXTENSIONS = {".dat", ".bin", ".pak", ".pck", ".rpa", ".db", ".locres", ".uasset", ".bytes"}
+UNITY_EXTENSIONS = {".assets", ".bundle", ".unity3d", ".assetbundle"}
+
+
+def carry_translations(previous, current):
+    """Retain exact-source edits on rescan, but use the corrected selection rules."""
+    if previous is None or Path(previous.root).resolve() != Path(current.root).resolve():
+        return 0
+    current.glossary = dict(previous.glossary)
+    current.instructions = previous.instructions
+    old = {entry.id: entry for entry in previous.entries}
+    carried = 0
+    for entry in current.entries:
+        match = old.get(entry.id)
+        if match and match.source == entry.source and match.locator == entry.locator and match.translation:
+            entry.translation = match.translation
+            carried += 1
+    return carried
+
+
+def is_unity(path: Path, header: bytes) -> bool:
+    return (header.startswith((b"UnityFS\x00", b"UnityWeb\x00", b"UnityRaw\x00"))
+            or path.suffix.lower() in UNITY_EXTENSIONS
+            or path.name == "globalgamemanagers" or bool(re.fullmatch(r"level\d+", path.name)))
+
+
+def scan(root: str | Path, progress=lambda text: None, cancelled=lambda: False,
+         deep=False, max_mb=256) -> Project:
+    root = Path(root).resolve()
+    if not root.is_dir():
+        raise ValueError("Thư mục game không tồn tại.")
+    project = Project(str(root))
+    candidates = []
+    engines = set()
+    scripts = {}
+
+    def walk_error(error):
+        project.files.append(FileRecord(str(Path(error.filename).relative_to(root)), "error", note=str(error)))
+
+    for directory, folders, files in os.walk(root, onerror=walk_error, followlinks=False):
+        if cancelled():
+            raise InterruptedError("Đã dừng quét.")
+        folders[:] = [d for d in folders if d.lower() not in SKIP_DIRS and not (Path(directory) / d).is_symlink()]
+        if any(d.endswith("_Data") for d in folders):
+            engines.add("Unity")
+        for filename in files:
+            path = Path(directory) / filename
+            if path.is_symlink() or not path.resolve().is_relative_to(root):
+                continue
+            ext = path.suffix.lower()
+            if filename.lower() == "unityplayer.dll":
+                engines.add("Unity")
+            if filename.lower() in ("rpg_core.js", "rmmz_core.js"):
+                engines.add("RPG Maker MV/MZ")
+            if ext in (".rpa", ".rpy", ".rpyc"):
+                engines.add("Ren'Py (nhận diện)")
+            if ext in (".pak", ".uasset", ".locres"):
+                engines.add("Unreal / PAK (cần xác minh)")
+            if ext == ".pck":
+                engines.add("Godot / PCK (cần xác minh)")
+            if ext not in TEXT_EXTENSIONS | UNITY_EXTENSIONS | BINARY_EXTENSIONS and ext != "":
+                continue
+            rel = path.relative_to(root).as_posix()
+            if runtime_metadata(rel):
+                project.files.append(FileRecord(rel, "metadata", note="Cấu hình runtime Unity/Addressables; không phải text game."))
+                continue
+            try:
+                with path.open("rb") as stream:
+                    header = stream.read(64)
+                unity = is_unity(path, header)
+                if not unity and ext not in TEXT_EXTENSIONS | BINARY_EXTENSIONS:
+                    continue
+                size = path.stat().st_size
+                if size > max_mb * 1024 * 1024:
+                    project.files.append(FileRecord(rel, "skipped", size=size, note=f"Vượt giới hạn {max_mb} MB/file."))
+                    continue
+                # Quick scan visits root assets first; bundles are listed for optional deep scan.
+                if unity and not deep and header.startswith((b"UnityFS", b"UnityWeb", b"UnityRaw")):
+                    project.files.append(FileRecord(rel, "bundle", size=size, note="Chọn Quét sâu để đọc bundle."))
+                    continue
+                candidates.append((path, rel, size, unity))
+            except OSError as exc:
+                project.files.append(FileRecord(rel, "error", note=str(exc)))
+    project.engines = sorted(engines) or ["Engine riêng / chưa xác định"]
+    for i, (path, rel, size, unity) in enumerate(candidates, 1):
+        if cancelled():
+            raise InterruptedError("Đã dừng quét.")
+        progress(f"[{i}/{len(candidates)}] {rel}")
+        record = FileRecord(rel, "unity" if unity else path.suffix.lower()[1:], size=size)
+        try:
+            data = path.read_bytes()
+            record.sha256 = digest(data)
+            if unity:
+                entries, record.note = extract_unity(data, rel, cancelled, script_registry=scripts)
+            elif path.suffix.lower() in TEXT_EXTENSIONS:
+                text, record.encoding = decode_text(data)
+                entries = extract(text, record.kind, rel)
+            else:
+                samples = []
+                for match in re.finditer(rb"[\x20-\x7e]{12,160}", data[:4 * 1024 * 1024]):
+                    text = match[0].decode("ascii")
+                    if " " in text and sum(c.isalpha() for c in text) > 8:
+                        samples.append(f"0x{match.start():X}: {text[:100]}")
+                        if len(samples) >= 3:
+                            break
+                record.note = "Định dạng chưa hỗ trợ ghi lại. " + " | ".join(samples)
+                entries = []
+            record.count = len(entries)
+            project.entries.extend(entries)
+        except InterruptedError:
+            raise
+        except Exception as exc:
+            record.note = f"Không đọc được: {type(exc).__name__}: {exc}"
+        project.files.append(record)
+    project.entries = resolve_table_entries(project.entries, scripts)
+    from collections import Counter
+    counts = Counter(e.file for e in project.entries)
+    for record in project.files:
+        record.count = counts[record.path]
+    progress(f"Xong: {len(project.entries):,} đoạn text; {sum(e.enabled for e in project.entries):,} vị trí tiếng Anh được chọn.")
+    return project
