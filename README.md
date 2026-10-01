@@ -92,7 +92,17 @@ Kiểm thử dùng dữ liệu tổng hợp và mock API; không cần game thư
 .\Build.ps1
 ```
 
-Kết quả ở `dist/0.6.0/ToolVH`; giữ toàn bộ thư mục cùng `_internal`. Build dùng `packaging/ToolVH.spec`, loại ICU lấy nhầm từ PATH để Qt dùng ICU Windows. Thư mục dist và runtime không được commit vào mã nguồn.
+Kết quả ở `dist/0.6.0/ToolVH`; giữ toàn bộ thư mục cùng `_internal`. Script tự đọc phiên bản từ `toolvh/__init__.py`, tạo `ToolVH-0.6.0-windows-x64.zip` và file SHA-256 để upload lên GitHub Releases. Dùng `-NoArchive` nếu chỉ muốn build thư mục chạy. Build dùng `packaging/ToolVH.spec`, loại ICU lấy nhầm từ PATH để Qt dùng ICU Windows. Thư mục dist và runtime không được commit vào mã nguồn.
+
+## Đăng GitHub Release
+
+1. Build bằng các lệnh trên. Người tải bản ZIP không cần cài Python.
+2. Mở [New release](https://github.com/JunnDung/ToolVH/releases/new), tạo tag khớp phiên bản (ví dụ `v0.6.0`) và chọn commit mã nguồn đã build.
+3. Đặt tiêu đề `ToolVH 0.6.0`, ghi thay đổi và giới hạn hỗ trợ.
+4. Đính kèm `dist/0.6.0/ToolVH-0.6.0-windows-x64.zip` và `.zip.sha256`, rồi **Publish release**.
+5. Người dùng giải nén toàn bộ ZIP, mở `ToolVH/ToolVH.exe`. Không tách EXE khỏi `_internal`.
+
+File **Source code (zip)** do GitHub tự tạo chỉ chứa mã nguồn. Không commit `.venv`, `build`, `dist` vào repo; upload bản chạy ở phần Assets của Release.
 
 ## Cấu trúc
 
