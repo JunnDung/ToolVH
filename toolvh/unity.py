@@ -7,6 +7,7 @@ from pathlib import Path
 from .formats import (LOCALIZATION, TEXT_KEYS, english_locale, extract, get_at, infer_kind,
                       locale_code, rebuild, score_text, set_at, walk_strings)
 from .model import Entry, make_entry
+from .moon import extract_provider, parse_provider, rebuild_provider, script_matches
 
 
 def load_unity(data: bytes):
@@ -73,6 +74,8 @@ def script_reference(obj, tree, file):
         return (file if asset == "__root__" else asset.lower(), path_id)
     if 0 < file_id <= len(obj.assets_file.externals):
         external = obj.assets_file.externals[file_id - 1].path.replace("\\", "/").rsplit("/", 1)[-1]
+        if str(obj.assets_file.name) == "__root__":
+            return ((Path(file).parent / external).as_posix(), path_id)
         return (external.lower(), path_id)
     return None
 
@@ -84,6 +87,8 @@ def collect_scripts(env, file, registry):
             asset = str(obj.assets_file.name)
             key = (file if asset == "__root__" else asset.lower(), obj.path_id)
             registry[key] = (tree.get("m_Namespace"), tree.get("m_ClassName"))
+            if script_matches(tree):
+                registry[("moon", key)] = True
 
 
 def resolve_table_entries(entries, registry):
@@ -114,12 +119,24 @@ def extract_unity(data: bytes, file: str, cancelled=lambda: False, script_regist
             continue
         container, path_id = object_key(obj)
         if obj.type.name == "MonoBehaviour" and not obj.serialized_type.node:
+            raw = obj.get_raw_data()
+            try:
+                header = parse_provider(raw, header_only=True)
+                reference = script_reference(obj, {"m_Script": {"m_FileID": header["file_id"], "m_PathID": header["script_id"]}}, file)
+                if registry.get(("moon", reference)) and obj.reader.endian == "<":
+                    entries.extend(extract_provider(raw, file, container, path_id))
+                    continue
+            except (ValueError, UnicodeError):
+                pass
             skipped_mono += 1
             continue
         try:
             if obj.type.name == "TextAsset":
                 asset = obj.parse_as_object()
                 name, text = asset.m_Name, asset.m_Script
+                if text.lstrip().lower().startswith(("<!doctype html", "<html")):
+                    notes.append(f"{name}: HTML/code cần bộ đọc riêng; không lấy từng dòng làm text.")
+                    continue
                 if not text or "\x00" in text[:4096]:
                     continue
                 kind = infer_kind(name, text)
@@ -182,7 +199,9 @@ def rebuild_unity(data: bytes, entries: list[Entry]) -> bytes:
         edits = groups.pop(key, None)
         if not edits:
             continue
-        if edits[0].locator["type"] == "TextAsset":
+        if edits[0].locator["type"] == "MoonTranslatedMessageProvider":
+            obj.set_raw_data(rebuild_provider(obj.get_raw_data(), edits))
+        elif edits[0].locator["type"] == "TextAsset":
             asset = obj.parse_as_object()
             inner = [replace(e, locator=e.locator["inner"]) for e in edits]
             asset.m_Script = rebuild(asset.m_Script, edits[0].locator["format"], inner)
@@ -207,7 +226,12 @@ def rebuild_unity(data: bytes, entries: list[Entry]) -> bytes:
         obj = objects.get(key)
         if obj is None:
             raise ValueError("Object Unity biến mất sau khi ghi.")
-        if edits[0].locator["type"] == "TextAsset":
+        if edits[0].locator["type"] == "MoonTranslatedMessageProvider":
+            parsed = parse_provider(obj.get_raw_data())
+            for edit in edits:
+                if parsed["rows"][edit.locator["row"]][0]["value"] != edit.translation:
+                    raise ValueError("Kiểm tra text Ori sau khi ghi thất bại.")
+        elif edits[0].locator["type"] == "TextAsset":
             asset = obj.parse_as_object()
             # Rebuild checks every exact locator against the translated source;
             # do not rerun language heuristics against Vietnamese for verification.

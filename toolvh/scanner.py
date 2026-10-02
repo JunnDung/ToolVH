@@ -21,6 +21,10 @@ def carry_translations(previous, current):
         return 0
     current.glossary = dict(previous.glossary)
     current.instructions = previous.instructions
+    current.preserve_names = previous.preserve_names
+    current.protected_names = list(previous.protected_names)
+    current.game_context = previous.game_context
+    current.font_patches = list(previous.font_patches)
     old = {entry.id: entry for entry in previous.entries}
     carried = 0
     for entry in current.entries:
@@ -102,6 +106,8 @@ def scan(root: str | Path, progress=lambda text: None, cancelled=lambda: False,
             except OSError as exc:
                 project.files.append(FileRecord(rel, "error", note=str(exc)))
     project.engines = sorted(engines) or ["Engine riêng / chưa xác định"]
+    # Read script identities before stripped Moon providers.
+    candidates.sort(key=lambda item: item[0].name.lower() != "globalgamemanagers.assets")
     for i, (path, rel, size, unity) in enumerate(candidates, 1):
         if cancelled():
             raise InterruptedError("Đã dừng quét.")

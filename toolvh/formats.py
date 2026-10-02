@@ -34,8 +34,9 @@ RUNTIME_JSON = {"runtimeinitializeonloads.json", "scriptingassemblies.json",
 
 def runtime_metadata(file: str) -> bool:
     path = "/" + file.replace("\\", "/").lower().lstrip("/")
-    return (path.rsplit("/", 1)[-1] in RUNTIME_JSON | {"performancetestruninfo", "performancetestruninfo.json",
-            "linebreaking leading characters", "linebreaking following characters"}
+    return ("/generatedsoundbanks/" in path or path.rsplit("/", 1)[-1] in RUNTIME_JSON | {"performancetestruninfo", "performancetestruninfo.json",
+            "linebreaking leading characters", "linebreaking following characters", "thirdpartynotices.txt", "third-party-notices.txt", "runtimebuildinformation", "runtimebuildinformation.json", "namedatabase"}
+            or "fpstestoutput" in path.rsplit("/", 1)[-1]
             or path.endswith(("/aa/settings.json", "/aa/catalog.json", "/addressableslink/link.xml")))
 
 

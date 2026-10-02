@@ -13,13 +13,14 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
     QPushButton, QSpinBox, QSplitter, QTabWidget, QTableView, QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget, QGridLayout, QScrollArea,
+    QVBoxLayout, QWidget, QGridLayout, QScrollArea, QDialog,
 )
 
 from .model import Project
 from .patching import export_csv, export_patch, import_csv, install_patch, apply_project, restore_project
 from .scanner import scan
-from .translation import APIConfig, Client, PROVIDERS, translate, validate, environment_key
+from .translation import APIConfig, Client, PROVIDERS, translate, validate, environment_key, normalize_translation
+from .terminology import validate_entry, audit, inferred_names
 from .settings import SettingsStore
 from .diagnostics import report_text, compatibility_report
 
@@ -150,7 +151,7 @@ class MainWindow(QMainWindow):
         self.settings_store = SettingsStore(settings_path)
         self.profiles, self.recent, self.active_provider = {}, [], None
         self.verified_api = None
-        self.setWindowTitle("ToolVH 0.6.0 · Việt hóa game")
+        self.setWindowTitle("ToolVH 0.6.3 · Việt hóa game")
         self.resize(1420, 940)
         self.setMinimumSize(1060, 740)
         base = QWidget()
@@ -323,6 +324,21 @@ class MainWindow(QMainWindow):
         self.glossary = QPlainTextEdit()
         self.glossary.setPlaceholderText("Mỗi dòng: thuật ngữ = bản dịch\nChef = Đầu bếp\nOnion King = Vua Hành Tây")
         self.glossary.setMaximumHeight(180)
+        self.preserve_names = QCheckBox("Giữ nguyên tên nhân vật, địa danh, vật phẩm và kỹ năng")
+        self.preserve_names.setChecked(True)
+        self.protected_names = QPlainTextEdit()
+        self.protected_names.setMaximumHeight(110)
+        self.protected_names.setPlaceholderText("Mỗi dòng một tên cần giữ nguyên. Tool nhận diện một số tên theo dữ liệu game; thêm tên còn thiếu tại đây.")
+        self.game_context = QPlainTextEdit()
+        self.game_context.setMaximumHeight(100)
+        self.game_context.setPlaceholderText("Thể loại game, vai trò nhân vật, cách xưng hô, ngữ cảnh nhiệm vụ…")
+        review_actions = QWidget()
+        review_layout = QHBoxLayout(review_actions)
+        review_layout.setContentsMargins(0, 0, 0, 0)
+        review_layout.addWidget(self.button("Xem tên nhận diện", self.show_names))
+        review_layout.addWidget(self.button("Kiểm tra bản dịch", self.audit_translations))
+        review_layout.addWidget(self.button("Dịch lại các câu đã chọn", lambda: self.start_translation(overwrite=True)))
+        review_layout.addStretch()
         self.max_mb = QSpinBox()
         self.max_mb.setRange(1, 4096)
         self.max_mb.setValue(256)
@@ -337,7 +353,9 @@ class MainWindow(QMainWindow):
         for label, widget in [("Dịch vụ", self.provider), ("Base URL", self.endpoint), ("API key", key_row),
                               ("Lưu key", self.remember_key), ("Model", model_row),
                               ("Câu mỗi lô", self.batch_size), ("Nghỉ giữa các lô", self.delay_seconds), ("Định dạng", self.json_mode),
-                              ("Văn phong", self.instructions), ("Thuật ngữ", self.glossary), ("Giới hạn quét", self.max_mb)]:
+                              ("Văn phong", self.instructions), ("Ngữ cảnh game", self.game_context),
+                              ("Tên riêng", self.preserve_names), ("Giữ thêm tên", self.protected_names),
+                              ("Thuật ngữ", self.glossary), ("Duyệt bản dịch", review_actions), ("Giới hạn quét", self.max_mb)]:
             form.addRow(label, widget)
             if label == "Model":
                 form.addRow("", api_actions_widget)
@@ -350,6 +368,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.settings_page, "02   Google AI / Cấu hình")
         self.instructions.textChanged.connect(self.on_edit)
         self.glossary.textChanged.connect(self.on_edit)
+        self.preserve_names.toggled.connect(self.on_edit)
+        self.protected_names.textChanged.connect(self.on_edit)
+        self.game_context.textChanged.connect(self.on_edit)
 
         report = QWidget()
         self.report_page = report
@@ -367,6 +388,7 @@ class MainWindow(QMainWindow):
         patch_actions.addWidget(self.button("Cài bản vá…", lambda: self.apply_patch(False)))
         patch_actions.addWidget(self.button("Khôi phục bản gốc…", lambda: self.apply_patch(True)))
         patch_actions.addWidget(self.button("Xuất chẩn đoán…", self.export_diagnostics))
+        patch_actions.addWidget(self.button("Kiểm tra / sửa font…", self.open_font_manager, primary=True))
         patch_actions.addStretch()
         report_layout.addLayout(patch_actions)
         self.log = QPlainTextEdit()
@@ -539,6 +561,9 @@ class MainWindow(QMainWindow):
             glossary[key.strip()] = value.strip()
         self.project.glossary = glossary
         self.project.instructions = self.instructions.toPlainText()
+        self.project.preserve_names = self.preserve_names.isChecked()
+        self.project.protected_names = [s.strip() for s in self.protected_names.toPlainText().splitlines() if s.strip()]
+        self.project.game_context = self.game_context.toPlainText().strip()
 
     def save_project(self):
         if not self.project:
@@ -563,6 +588,9 @@ class MainWindow(QMainWindow):
         self.project = project
         self.game_path.setText(project.root)
         self.instructions.setPlainText(project.instructions)
+        self.preserve_names.setChecked(project.preserve_names)
+        self.protected_names.setPlainText("\n".join(project.protected_names))
+        self.game_context.setPlainText(project.game_context)
         self.glossary.setPlainText("\n".join(f"{k} = {v}" for k, v in project.glossary.items()))
         self.model.set_entries(project.entries)
         self.search.clear()
@@ -628,12 +656,17 @@ class MainWindow(QMainWindow):
         if entry is not getattr(self, "editor_entry", None):
             self.select_entry()
             return
-        text = self.target.toPlainText()
-        errors = validate(entry.source, text) if text else []
+        text = normalize_translation(self.target.toPlainText())
+        try:
+            self.sync_settings()
+        except ValueError as exc:
+            return self.error(str(exc))
+        errors = validate_entry(self.project, entry, text) if text else []
         if errors:
             self.validation.setText(" ".join(errors))
             return
         entry.translation, entry.error = text, ""
+        self.target.setPlainText(text)
         self.model.layoutChanged.emit()
         self.on_edit()
         self.validation.setText("Đã cập nhật câu dịch." + (" Bản dịch dài hơn 1,7 lần; kiểm tra bố cục." if len(text) > max(30, len(entry.source) * 1.7) else ""))
@@ -654,7 +687,7 @@ class MainWindow(QMainWindow):
         if not self.maybe_save():
             return
         root, deep, max_mb = self.game_path.text(), self.deep.isChecked(), self.max_mb.value()
-        if self.project and self.project.applied_patch and Path(root).resolve() == Path(self.project.root).resolve():
+        if self.project and (self.project.applied_patch or self.project.font_patches) and Path(root).resolve() == Path(self.project.root).resolve():
             return self.error("Khôi phục bản gốc trước khi quét lại game đã cài bản dịch.")
         previous = self.project
         def success(project):
@@ -714,9 +747,9 @@ class MainWindow(QMainWindow):
                 'Tắt JSON mode nếu model không hỗ trợ; kết quả vẫn phải đúng JSON. Kiểm tra kết nối dùng một lượt gọi dịch.')
         elif provider == "google-web":
             self.api_help.setText("Google Dịch web: không cần key/model. Dịch English → Vietnamese, lưu từng câu, nghỉ tối thiểu 2 giây mỗi yêu cầu. "
-                                 "Dịch từng câu, không dùng văn phong/thuật ngữ/ngữ cảnh của project; cần duyệt lại từ đa nghĩa. "
+                                 "Dịch từng câu, không dùng văn phong/ngữ cảnh của project; cần duyệt lại từ đa nghĩa. "
                                  "Endpoint web thử nghiệm có thể bị giới hạn hoặc thay đổi; không bảo đảm miễn phí vô hạn. "
-                                 "Không dùng glossary/hướng dẫn/ngữ cảnh như Gemini. Bấm Kiểm tra kết nối rồi Dịch thử 10 câu.")
+                                 "Tên riêng và glossary được bảo vệ cục bộ. Google Dịch không dùng văn phong/ngữ cảnh như Gemini. Bấm Kiểm tra kết nối rồi Dịch thử 10 câu.")
         elif provider == "ollama":
             self.api_help.setText("Khởi động Ollama, Tải danh sách model rồi chọn model trên máy. URL: http://localhost:11434. "
                                   "Tool dùng tối đa 5 câu/lô, tắt suy luận, context 8192 và chờ tối thiểu 300 giây khi tải model. "
@@ -801,7 +834,7 @@ class MainWindow(QMainWindow):
             self.api_status.setText(f"Kết nối và sinh bản dịch thành công • {config.model}\nStart game → {translation}")
         self.run_job(lambda progress: client.test_connection(self.stop), success)
 
-    def start_translation(self, checked=False, limit=None):
+    def start_translation(self, checked=False, limit=None, overwrite=False):
         if not self.project:
             return self.error("Hãy quét game hoặc mở project trước.")
         if self.project.scan_revision < 2:
@@ -812,13 +845,44 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.tabs.setCurrentWidget(self.settings_page)
             return self.error(str(exc))
-        if not any(e.enabled and not e.translation for e in self.project.entries):
+        if not any(e.enabled and (overwrite or not e.translation) for e in self.project.entries):
             return QMessageBox.information(self, "Dịch tiếng Việt", "Không còn câu chưa dịch trong các mục đã chọn.")
+        if overwrite and QMessageBox.question(self, "Dịch lại", "Dịch lại mọi câu đang được đánh dấu chọn? Tool lưu bản sao project trước khi bắt đầu và giữ câu cũ nếu dịch thất bại.") != QMessageBox.Yes:
+            return
         if not self.save_project():
             return
         project, path = self.project, self.project_path
-        self.run_job(lambda progress: translate(project, config, progress, self.stop, lambda: project.save(path), limit=limit),
+        if overwrite:
+            try:
+                from datetime import datetime
+                backup = path.with_name(path.stem + ".before-retranslate-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f") + path.suffix)
+                project.save(backup)
+            except Exception as exc:
+                return self.error(str(exc))
+        self.run_job(lambda progress: translate(project, config, progress, self.stop, lambda: project.save(path), limit=limit, overwrite=overwrite),
                      lambda count: self.translation_finished(count))
+
+    def show_names(self):
+        if not self.project:
+            return self.error("Hãy quét game hoặc mở project trước.")
+        names = inferred_names(self.project)
+        QMessageBox.information(self, "Tên nhận diện", "Tên này được bảo vệ khi bật Giữ nguyên tên. Có thể bổ sung ở Giữ thêm tên hoặc ghi bản dịch trong Thuật ngữ.\n\n" + "\n".join(names))
+
+    def audit_translations(self):
+        if not self.project:
+            return self.error("Hãy mở project trước.")
+        try:
+            self.sync_settings()
+            count = audit(self.project)
+            self.on_edit()
+            self.model.layoutChanged.emit()
+            self.select_entry()
+            self.status.setText(f"Phát hiện {count} câu cần sửa biến/tên riêng. Kiểm tra nghĩa lời thoại vẫn cần duyệt thủ công.")
+            self.state.setCurrentText("Có lỗi")
+            self.tabs.setCurrentIndex(1)
+            QMessageBox.information(self, "Kiểm tra bản dịch", f"{count} câu vi phạm quy tắc tên riêng/biến. Bản dịch hiện có được giữ lại. Xem bộ lọc Có lỗi; chọn các câu cần sửa rồi dùng Dịch lại ở Cấu hình.")
+        except Exception as exc:
+            self.error(str(exc))
 
     def translation_finished(self, count):
         self.dirty = False
@@ -882,6 +946,8 @@ class MainWindow(QMainWindow):
             return self.error("Hãy quét game và dịch các câu cần thiết trước.")
         try:
             self.project.require_current_scan()
+            if self.project.font_patches:
+                raise ValueError("Khôi phục font trước khi cài bản dịch mới; bản dịch đang cài sẽ được giữ.")
             if self.project.applied_patch:
                 raise ValueError("Khôi phục bản gốc trước khi cài bản dịch mới.")
         except Exception as exc:
@@ -922,8 +988,178 @@ class MainWindow(QMainWindow):
         action = "Khôi phục bản gốc" if restore else "Cài bản vá"
         if QMessageBox.question(self, action, f"Đã đóng game?\n\n{action} vào:\n{game}\n\nTool sẽ kiểm tra phiên bản file trước khi ghi.") != QMessageBox.Yes:
             return
-        self.run_job(lambda progress: install_patch(patch, game, restore),
-                     lambda count: QMessageBox.information(self, action, f"Hoàn tất {count} file."), cancellable=False)
+        try:
+            manifest = json.loads((Path(patch) / "manifest.json").read_text(encoding="utf-8"))
+            same_game = self.project and Path(self.project.root).resolve() == Path(game).resolve()
+            is_font = manifest.get("kind") == "font"
+            if same_game and self.project.font_patches and not is_font:
+                return self.error("Khôi phục font trước khi cài hoặc khôi phục bản dịch.")
+            if same_game and is_font:
+                if not self.save_project():
+                    return
+                from .fonts import apply_font_patch, restore_font
+                project, path = self.project, self.project_path
+                if restore and project.font_patches:
+                    if Path(project.font_patches[-1]).resolve() != Path(patch).resolve():
+                        return self.error("Khôi phục bản vá font mới nhất trước để đúng thứ tự backup.")
+                    work = lambda progress: restore_font(project, lambda: project.save(path))
+                elif not restore:
+                    work = lambda progress: apply_font_patch(project, patch, lambda: project.save(path))
+                else:
+                    work = lambda progress: install_patch(patch, game, True)
+            else:
+                work = lambda progress: install_patch(patch, game, restore)
+            self.run_job(work, lambda count: QMessageBox.information(self, action, f"Hoàn tất {count} file."), cancellable=False)
+        except Exception as exc:
+            self.error(str(exc))
+
+    def open_font_manager(self):
+        if not self.project:
+            return self.error("Hãy quét hoặc mở project game trước.")
+        dialog = QDialog(self)
+        dialog.setWindowTitle("ToolVH · Kiểm tra và sửa font tiếng Việt")
+        dialog.resize(1100, 650)
+        layout = QVBoxLayout(dialog)
+        note = QLabel("Quét font → chọn font thiếu ký tự → tạo/cài bản vá. Ori: bổ sung glyph SDF vào font bitmap đã xác nhận.\n"
+                      "Font nguồn lấy từ máy bạn hoặc TTF/OTF tự chọn. Font icon được giữ nguyên. TMP, UE, Godot đóng gói cần adapter riêng; chưa sửa mọi game tự động.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        tree = QTreeWidget()
+        tree.setHeaderLabels(["Font / file", "Loại", "Ký tự thiếu", "Hỗ trợ"])
+        tree.setColumnWidth(0, 320)
+        tree.setColumnWidth(1, 130)
+        tree.setColumnWidth(2, 250)
+        layout.addWidget(tree, 1)
+        source_row = QHBoxLayout()
+        source = QLineEdit()
+        source.setPlaceholderText("Để trống: chọn font có tiếng Việt từ Windows; có thể chọn TTF/OTF khác")
+        source_row.addWidget(source, 1)
+        def choose_source():
+            path, _ = QFileDialog.getOpenFileName(dialog, "Chọn font có tiếng Việt", "", "Font (*.ttf *.otf)")
+            if path:
+                source.setText(path)
+        source_row.addWidget(self.button("Chọn TTF/OTF…", choose_source))
+        layout.addLayout(source_row)
+        status = QLabel("Bấm Quét font. Tool kiểm tra bộ ký tự tiếng Việt và ký tự của bản dịch đã chọn.")
+        status.setWordWrap(True)
+        layout.addWidget(status)
+        state = {"report": None, "root": self.project.root}
+        self.font_state = state
+        self.font_tree = tree
+        def scan_fonts():
+            if self.busy:
+                return
+            from .fonts import diagnose
+            if self.project.root != state["root"]:
+                return self.error("Game đã đổi; mở lại cửa sổ font.")
+            def finished(report):
+                state["report"] = report
+                tree.clear()
+                has_english_bindings = any(r.get("english_usage") for r in report["fonts"])
+                for record in report["fonts"]:
+                    item = QTreeWidgetItem([record["name"] + " / " + record["file"], record["kind"], record["missing"], record["note"]])
+                    item.setData(0, Qt.UserRole, record)
+                    item.setToolTip(2, record["missing"] or "Không thiếu ký tự trong bộ kiểm tra.")
+                    if record["repairable"]:
+                        default_fix = record["missing"] and record["kind"] == "ori-bitmap" and (not has_english_bindings or record.get("english_usage"))
+                        item.setCheckState(0, Qt.Checked if default_fix else Qt.Unchecked)
+                    tree.addTopLevelItem(item)
+                english = [r for r in report["fonts"] if r.get("english_usage") and r["repairable"]]
+                coverage = f" Font English: {len(english)}, còn thiếu ký tự: {sum(bool(r['missing']) for r in english)}." if english else ""
+                status.setText(f"{len(report['fonts'])} font đọc được." + coverage + " " + " | ".join(report["notes"][:4]))
+            project = self.project
+            self.run_job(lambda progress: diagnose(project, progress, self.stop), finished)
+        def build_font(install):
+            if self.busy:
+                return
+            report = state["report"]
+            if not report:
+                return self.error("Quét font trước khi tạo bản vá.")
+            if self.project.root != state["root"]:
+                return self.error("Game đã đổi; quét font lại.")
+            selected = [tree.topLevelItem(i).data(0, Qt.UserRole) for i in range(tree.topLevelItemCount())
+                        if tree.topLevelItem(i).checkState(0) == Qt.Checked]
+            if not selected:
+                return self.error("Chọn ít nhất một font hỗ trợ sửa.")
+            if not self.save_project():
+                return
+            import uuid
+            if install:
+                if QMessageBox.question(dialog, "Cài font vào game", "Đóng game trước khi cài font. Tool tạo bản vá và backup trạng thái hiện tại, giữ bản dịch đang cài. Tiếp tục?") != QMessageBox.Yes:
+                    return
+                destination = self.settings_store.path.parent / "font-patches" / uuid.uuid4().hex
+            else:
+                parent = QFileDialog.getExistingDirectory(dialog, "Chọn nơi chứa bản vá font, ngoài thư mục game")
+                if not parent:
+                    return
+                destination = Path(parent) / ("ToolVH-font-" + uuid.uuid4().hex[:12])
+            from .fonts import export_font_patch, apply_font_patch
+            project, path = self.project, self.project_path
+            font_source = source.text().strip() or None
+            def work(progress):
+                result = export_font_patch(project, report, selected, destination, font_source, progress)
+                if install:
+                    result["installed"] = apply_font_patch(project, destination, lambda: project.save(path))
+                return result
+            def finished(result):
+                state["report"] = None  # A second repair requires a fresh scan/hash check.
+                status.setText(f"{'Đã cài' if install else 'Đã tạo'} bản vá font: {destination}. Hãy thử menu và hội thoại trong game.")
+                self.dirty = False
+                QMessageBox.information(dialog, "Bản vá font", status.text())
+            self.run_job(work, finished, cancellable=False)
+        def undo_font():
+            if self.busy:
+                return
+            if self.project.root != state["root"]:
+                return self.error("Game đã đổi; mở lại cửa sổ font.")
+            if not self.project.font_patches:
+                return self.error("Project chưa ghi nhận bản vá font. Dùng Khôi phục bản gốc… với thư mục bản vá riêng nếu cài bên ngoài.")
+            if not self.save_project():
+                return
+            if QMessageBox.question(dialog, "Khôi phục font", "Đóng game rồi khôi phục bản vá font gần nhất? Bản dịch trước khi sửa font được giữ lại.") != QMessageBox.Yes:
+                return
+            from .fonts import restore_font
+            project, path = self.project, self.project_path
+            def finished(count):
+                state["report"] = None
+                status.setText(f"Đã khôi phục {count} file của bản vá font gần nhất.")
+                self.dirty = False
+            self.run_job(lambda progress: restore_font(project, lambda: project.save(path)), finished, cancellable=False)
+        def normalize_text():
+            if self.busy or self.project.root != state["root"]:
+                return
+            edits = [(e, normalize_translation(e.translation)) for e in self.project.entries if e.translation]
+            edits = [(e, text) for e, text in edits if text != e.translation]
+            if not edits:
+                return QMessageBox.information(dialog, "Unicode", "Bản dịch đã ở dạng NFC; không cần sửa.")
+            if not self.save_project():
+                return
+            try:
+                import uuid
+                backup = self.project_path.with_name(self.project_path.stem + ".before-unicode-" + uuid.uuid4().hex[:12] + self.project_path.suffix)
+                self.project.save(backup)
+                for e, text in edits:
+                    e.translation = text
+                audit(self.project)
+                self.on_edit()
+                self.model.layoutChanged.emit()
+                self.select_entry()
+                state["report"] = None
+                self.save_project()
+                status.setText(f"Đã chuẩn hóa {len(edits)} câu sang NFC, giữ thẻ/biến. Backup: {backup}. Quét font lại; bản dịch trong game cần cài lại nếu dùng dấu kết hợp.")
+            except Exception as exc:
+                self.error(str(exc))
+        actions = QHBoxLayout()
+        actions.addWidget(self.button("Quét font", scan_fonts, primary=True))
+        actions.addWidget(self.button("Chuẩn hóa Unicode", normalize_text))
+        actions.addWidget(self.button("Xuất bản vá font…", lambda: build_font(False)))
+        actions.addWidget(self.button("Tạo và cài font", lambda: build_font(True), primary=True))
+        actions.addWidget(self.button("Khôi phục font", undo_font))
+        actions.addStretch()
+        actions.addWidget(self.button("Đóng", dialog.close))
+        layout.addLayout(actions)
+        self.font_dialog = dialog
+        dialog.show()
 
     def cancel_job(self):
         self.stop.set()
@@ -1017,11 +1253,18 @@ def run(project_path=None, smoke_report=None):
             path.parent.mkdir(parents=True, exist_ok=True)
             image_path = path.with_suffix(".png")
             saved = window.grab().save(str(image_path))
+            from .fonts import font_coverage, suggested_font, VIETNAMESE
+            font = suggested_font("candara")
+            coverage = font_coverage(font)
+            window.open_font_manager()
+            font_dialog_saved = window.font_dialog.grab().save(str(path.with_name(path.stem + "-fonts.png")))
+            window.font_dialog.close()
             atomic_write(path, json.dumps({"version": __version__, "tabs": window.tabs.count(),
                          "providers": [window.provider.itemData(i) for i in range(window.provider.count())],
                          "project_entries": len(window.project.entries) if window.project else 0,
                          "selected_entries": sum(e.enabled for e in window.project.entries) if window.project else 0,
-                         "screenshot_saved": saved, "network_called": False}, indent=2).encode())
+                         "screenshot_saved": saved, "font_dialog_saved": font_dialog_saved,
+                         "font_probe": {"vietnamese_supported": VIETNAMESE <= coverage, "source": font.name}, "network_called": False}, indent=2).encode())
             window.dirty = False
             window.close()
             app.quit()

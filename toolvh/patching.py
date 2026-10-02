@@ -11,7 +11,8 @@ from pathlib import Path
 
 from .formats import decode_text, encode_text, rebuild
 from .model import Project, atomic_write, digest, safe_child
-from .translation import validate
+from .terminology import validate_entry, term_policy
+from .translation import normalize_translation
 from .unity import rebuild_unity
 from .addressables import catalog_updates
 from .godot import RESOURCE_EXTENSIONS, rebuild_pack, rebuild_resource
@@ -28,6 +29,7 @@ def export_csv(project: Project, path: str | Path):
 
 
 def import_csv(project: Project, path: str | Path):
+    terms = term_policy(project)
     entries = {e.id: e for e in project.entries}
     edits, seen = [], set()
     with Path(path).open(encoding="utf-8-sig", newline="") as stream:
@@ -36,9 +38,9 @@ def import_csv(project: Project, path: str | Path):
             if entry is None or entry.source != row.get("source") or entry.id in seen:
                 raise ValueError("CSV có ID lạ, ID trùng hoặc text nguồn đã thay đổi.")
             seen.add(entry.id)
-            translation = row.get("translation", "")
+            translation = normalize_translation(row.get("translation", ""))
             if translation:
-                errors = validate(entry.source, translation)
+                errors = validate_entry(project, entry, translation, terms)
                 if errors:
                     raise ValueError(f"{entry.context}: {' '.join(errors)}")
             enabled = row.get("enabled", "1")
@@ -52,6 +54,8 @@ def import_csv(project: Project, path: str | Path):
 
 def export_patch(project: Project, destination: str | Path, progress=lambda text: None):
     project.require_current_scan()
+    if project.font_patches:
+        raise ValueError("Khôi phục bản vá font trước khi xuất/cài bản dịch mới; bản dịch đang cài sẽ được giữ.")
     if project.applied_patch:
         raise ValueError("Hãy khôi phục bản gốc trước khi xuất/cài bản dịch mới từ project này.")
     root, destination = Path(project.root).resolve(), Path(destination).resolve()
@@ -59,10 +63,11 @@ def export_patch(project: Project, destination: str | Path, progress=lambda text
         raise ValueError("Chọn thư mục bản vá nằm ngoài thư mục game và không chứa thư mục game.")
     if destination.exists():
         raise ValueError("Thư mục đích đã tồn tại. Chọn tên mới để giữ các bản vá cũ.")
+    terms = term_policy(project)
     groups = defaultdict(list)
     for e in project.entries:
         if e.enabled and e.translation:
-            errors = validate(e.source, e.translation)
+            errors = validate_entry(project, e, e.translation, terms)
             if errors:
                 raise ValueError(f"{e.context}: {' '.join(errors)}")
             groups[e.file].append(e)
@@ -117,6 +122,8 @@ def export_patch(project: Project, destination: str | Path, progress=lambda text
 
 
 def install_patch(patch: str | Path, game: str | Path, restore=False):
+    from .processes import assert_game_closed
+    assert_game_closed(game)
     patch, game = Path(patch).resolve(), Path(game).resolve()
     manifest = json.loads((patch / "manifest.json").read_text(encoding="utf-8"))
     if manifest.get("schema") != 1 or not manifest.get("files"):
@@ -174,6 +181,8 @@ def apply_project(project: Project, destination: str | Path, progress=lambda tex
 
 
 def restore_project(project: Project, save=lambda: None):
+    if project.font_patches:
+        raise ValueError("Khôi phục font trước, sau đó khôi phục bản dịch để đúng thứ tự backup.")
     if not project.applied_patch:
         raise ValueError("Project chưa ghi nhận bản vá đã cài.")
     count = install_patch(project.applied_patch, project.root, restore=True)

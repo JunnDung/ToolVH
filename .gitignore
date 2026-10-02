@@ -31,3 +31,23 @@ Thumbs.db
 .DS_Store
 *.spec
 !packaging/ToolVH.spec
+
+# Local translations, backups and game containers
+backups/
+patches/
+reports/
+smoke-output/
+.cache/
+*.bak
+*.toolvh.csv
+*.resS
+*.resource
+*.pck
+*.pak
+*.utoc
+*.ucas
+*.locres
+*.ttf
+*.otf
+*.ttc
+*.fnt

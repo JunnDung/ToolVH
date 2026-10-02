@@ -43,9 +43,13 @@ class Project:
     entries: list[Entry] = field(default_factory=list)
     glossary: dict[str, str] = field(default_factory=dict)
     instructions: str = "Dịch tự nhiên, ngắn gọn, phù hợp giao diện và hội thoại game."
+    preserve_names: bool = True
+    protected_names: list[str] = field(default_factory=list)
+    game_context: str = ""
     schema: int = 1
     scan_revision: int = 2
     applied_patch: str = ""
+    font_patches: list[str] = field(default_factory=list)
 
     def require_current_scan(self):
         if self.scan_revision < 2:
