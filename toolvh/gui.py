@@ -337,6 +337,7 @@ class MainWindow(QMainWindow):
         review_layout.setContentsMargins(0, 0, 0, 0)
         review_layout.addWidget(self.button("Xem tên nhận diện", self.show_names))
         review_layout.addWidget(self.button("Kiểm tra bản dịch", self.audit_translations))
+        review_layout.addWidget(self.button("Xóa cache Google Dịch", self.clear_google_cache))
         review_layout.addWidget(self.button("Dịch lại các câu đã chọn", lambda: self.start_translation(overwrite=True)))
         review_layout.addStretch()
         self.max_mb = QSpinBox()
@@ -347,6 +348,7 @@ class MainWindow(QMainWindow):
         api_actions = QHBoxLayout(api_actions_widget)
         api_actions.setContentsMargins(0, 0, 0, 0)
         api_actions.addWidget(self.button("Kiểm tra kết nối", self.test_api, primary=True))
+        api_actions.addWidget(self.button("Tối ưu tốc độ", self.optimize_translation_speed))
         api_actions.addWidget(self.button("Lưu cấu hình", self.save_api_settings))
         api_actions.addWidget(self.button("Xóa key đã nhớ", self.forget_key))
         api_actions.addStretch()
@@ -451,6 +453,7 @@ class MainWindow(QMainWindow):
             box.addWidget(self.button(action, callback, primary=index == 0))
             grid.addWidget(card, index // 2, index % 2)
         layout.addLayout(grid)
+        layout.addWidget(self.button("Chọn Google Dịch miễn phí", self.choose_google_free))
         self.home_summary = QLabel("Chưa mở project • Bắt đầu bằng Chọn game & quét hoặc Mở project.")
         self.home_summary.setObjectName("metric")
         self.home_summary.setWordWrap(True)
@@ -748,15 +751,19 @@ class MainWindow(QMainWindow):
                 'Tắt JSON mode nếu model không hỗ trợ; kết quả vẫn phải đúng JSON. Kiểm tra kết nối dùng một lượt gọi dịch.')
         elif provider == "google-web":
             self.api_help.setText("Google Dịch web: không cần key/model. Dịch English → Vietnamese, lưu từng câu, nghỉ tối thiểu 2 giây mỗi yêu cầu. "
-                                 "Dịch từng câu, không dùng văn phong/ngữ cảnh của project; cần duyệt lại từ đa nghĩa. "
+                                 "Cache theo project giúp giảm gọi lại đoạn trùng; tự chia đoạn dài tại điểm ngắt. Không dùng văn phong/ngữ cảnh của project; cần duyệt lại từ đa nghĩa. "
                                  "Endpoint web thử nghiệm có thể bị giới hạn hoặc thay đổi; không bảo đảm miễn phí vô hạn. "
-                                 "Tên riêng và glossary được bảo vệ cục bộ. Google Dịch không dùng văn phong/ngữ cảnh như Gemini. Bấm Kiểm tra kết nối rồi Dịch thử 10 câu.")
+                                 "Tên riêng và glossary được bảo vệ cục bộ. Dịch lại bỏ qua cache; có nút Xóa cache Google Dịch. Bấm Kiểm tra kết nối rồi Dịch thử 10 câu.")
         elif provider == "ollama":
             self.api_help.setText("Khởi động Ollama, Tải danh sách model rồi chọn model trên máy. URL: http://localhost:11434. "
                                   "Tool dùng tối đa 5 câu/lô, tắt suy luận, context 8192 và chờ tối thiểu 300 giây khi tải model. "
                                   "Bật JSON mode để ràng buộc cấu trúc. Dịch thử 10 câu và duyệt chất lượng trước khi dịch cả game.")
+        elif provider == "openai-responses":
+            self.api_help.setText("Nhập Base URL của API Responses (ví dụ https://api.openai.com/v1), model và key của nhà cung cấp. "
+                                  "Có thể dán URL kết thúc bằng /responses; tool tự chuẩn hóa. Tải danh sách model rồi Kiểm tra kết nối. "
+                                  "Gửi ngữ cảnh, hướng dẫn và token bảo vệ tên; chỉ nhận response hoàn tất. API có thể mất phí theo nhà cung cấp.")
         else:
-            self.api_help.setText("Nhập Base URL, model và key của nhà cung cấp. URL dừng ở /v1 hoặc đường dẫn API tương thích, không thêm /chat/completions.")
+            self.api_help.setText("Nhập Base URL, model và key của nhà cung cấp. URL dừng ở /v1 hoặc đường dẫn API tương thích, không thêm /chat/completions. URL kết thúc /responses được tự nhận diện dùng Responses.")
         self.api_changed()
 
     def api_config(self, provider=None):
@@ -867,6 +874,34 @@ class MainWindow(QMainWindow):
             return translate(project, config, progress, self.stop, lambda: project.save(path), limit=limit, overwrite=overwrite)
         self.run_job(work,
                      lambda count: self.translation_finished(count))
+
+    def optimize_translation_speed(self):
+        provider = self.provider.currentData()
+        if provider == "google-web":
+            batch, delay = 1, 2
+        elif provider == "ollama":
+            batch, delay = 5, 0
+        elif provider in ("groq", "openrouter-free"):
+            batch, delay = 10, 2
+        else:
+            batch, delay = 40, 0
+        self.batch_size.setValue(batch)
+        self.delay_seconds.setValue(delay)
+        self.api_status.setText(f"Đã đặt {batch} câu/lô, nghỉ {delay} giây. Ngữ cảnh và kiểm tra tên/biến vẫn được giữ. "
+                                "Tốc độ phụ thuộc model/quota; nếu bị cắt hoặc 429, giảm lô/tăng thời gian nghỉ. Chưa gọi API.")
+
+    def choose_google_free(self):
+        self.provider.setCurrentIndex(self.provider.findData("google-web"))
+        self.tabs.setCurrentWidget(self.settings_page)
+        self.status.setText("Đã chọn Google Dịch web không cần key. Kiểm tra kết nối và dịch thử trước; endpoint có thể bị giới hạn.")
+
+    def clear_google_cache(self):
+        if not self.project:
+            return self.error("Hãy quét game hoặc mở project trước.")
+        count = len(self.project.google_web_cache)
+        self.project.google_web_cache.clear()
+        self.on_edit()
+        self.status.setText(f"Đã xóa {count} đoạn cache Google Dịch. Bản dịch hiện có được giữ; lưu project để ghi thay đổi.")
 
     def show_names(self):
         if not self.project:

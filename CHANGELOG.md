@@ -1,5 +1,33 @@
 # Thay đổi phiên bản
 
+## 0.7.5
+
+- Thêm API Responses và tự nhận diện URL /responses trong preset tương thích OpenAI; chuẩn hóa URL, gửi instructions/input/store:false và đọc output hoàn tất.
+- Chặn response bị cắt/từ chối/sai cấu trúc; kiểm tra ID, tên riêng, biến và thẻ trước khi lưu.
+- Nút Tối ưu tốc độ đặt lô/thời gian nghỉ theo provider, giữ giới hạn ký tự và các kiểm tra chất lượng.
+- Ren’Py: bảo vệ tên người nói được khai báo dạng chuỗi, cải thiện ngữ cảnh qua người nói khác trong cùng label.
+
+## 0.7.4
+
+- Thông báo 403/429 Google Dịch web phân biệt chặn kết nối với key/billing Gemini; giữ retry có giới hạn.
+
+- Thêm lối chọn Google Dịch không cần key từ màn hình Bắt đầu; không tự gửi text hoặc chuyển sang API trả phí.
+
+- Google Dịch web: cache từng đoạn trong project, giảm gọi lại nội dung trùng; giữ cache khi quét lại cùng game, không mang sang game khác.
+- Bỏ thời gian nghỉ trùng giữa lô và yêu cầu; vẫn giữ nghỉ tối thiểu giữa yêu cầu mạng, retry giới hạn và lưu từng câu.
+- Chia đoạn dài tại ranh giới câu/từ, giữ khoảng trắng và biến/thẻ; chặn từ quá dài không có điểm ngắt.
+- Dịch lại bỏ qua cache; nút Xóa cache Google Dịch giữ nguyên bản dịch, cấu hình và key.
+
+## 0.7.3
+
+- Sửa lỗi CLI dừng khi console Windows dùng code page không chứa ký tự tiếng Việt.
+
+- Mở rộng visual novel Ren’Py: câu thoại có thuộc tính/tên người nói, extend, menu có điều kiện, say arguments và chuỗi trải qua nhiều dòng vật lý.
+- Monologue triple quote mặc định: tách từng khối theo dòng trống, giữ ranh giới lượt thoại và nội dung không được chọn.
+- Bổ sung label/người nói/thuộc tính vào ngữ cảnh; giữ tên người nói, Python, script và đường dẫn tài nguyên.
+- Chặn script có chuỗi chưa đóng; bỏ qua các chế độ monologue/cú pháp chưa hỗ trợ thay vì lấy nội dung bên trong làm thoại.
+- Thêm kiểm thử parser, đọc lại, bảo vệ biến/thẻ và xuất/chép/khôi phục. RPA/RPYC và xác minh bằng runtime vẫn chưa hỗ trợ.
+
 ## 0.7.2
 
 - Làm rõ chức năng Xuất để chép: thư mục files/ giữ đường dẫn game, gồm catalog đã cập nhật và backup riêng.

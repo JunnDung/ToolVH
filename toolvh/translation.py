@@ -21,11 +21,13 @@ PROVIDERS = {
     "openrouter-free": ("OpenRouter (chỉ model :free)", OPENROUTER_URL),
     "google-web": ("Google Dịch web (không key, thử nghiệm)", GOOGLE_WEB_URL),
     "openai-compatible": ("API tương thích OpenAI", "https://api.openai.com/v1"),
+    "openai-responses": ("API Responses (tương thích OpenAI)", "https://api.openai.com/v1"),
     "ollama": ("Ollama (máy cá nhân)", "http://localhost:11434"),
 }
 PROVIDER_KEY_ENV = {"gemini": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
                     "groq": ("GROQ_API_KEY",), "openrouter-free": ("OPENROUTER_API_KEY",),
-                    "openai-compatible": ("TOOLVH_API_KEY",)}
+                    "openai-compatible": ("TOOLVH_API_KEY",),
+                    "openai-responses": ("TOOLVH_API_KEY", "OPENAI_API_KEY")}
 
 
 def environment_key(provider):
@@ -90,6 +92,20 @@ def unmask(text, prefix, values):
     return text
 
 
+def google_chunks(text, maximum=4000):
+    """Split at existing whitespace, keeping every boundary character."""
+    chunks = []
+    while len(text.strip()) > maximum:
+        boundaries = [match for match in re.finditer(r"\s+", text[:maximum + 1]) if match.start() > 0]
+        if not boundaries:
+            raise ValueError("Google Dịch web: từ/đoạn không có điểm ngắt vượt 4.000 ký tự. Dùng Ollama hoặc sửa câu nguồn.")
+        sentences = [match for match in boundaries if text[match.start() - 1] in ".!?"]
+        cut = (sentences or boundaries)[-1].start()
+        chunks.append(text[:cut])
+        text = text[cut:]
+    return chunks + [text]
+
+
 @dataclass
 class APIConfig:
     provider: str = "openai-compatible"
@@ -110,6 +126,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def api_error_hint(error, provider):
     """Classify bounded error data; never echo response text, URLs or secrets."""
     code = error.code
+    if provider == "google-web" and code in (403, 429):
+        return ("Google Dịch web đang giới hạn hoặc chặn truy cập từ kết nối hiện tại. "
+                "Không liên quan API key hay billing Gemini. Thử lại sau hoặc chọn Ollama local; "
+                "tool không tự chuyển sang dịch vụ trả phí."), code == 429
     message, reasons = "", set()
     if provider == "gemini":
         try:
@@ -144,7 +164,13 @@ def api_error_hint(error, provider):
 
 class Client:
     def __init__(self, config: APIConfig, require_model=True):
+        if config.provider in ("openai-compatible", "openai-responses") and config.base_url.rstrip("/").endswith("/responses"):
+            from dataclasses import replace
+            config = replace(config, provider="openai-responses", base_url=config.base_url.rstrip("/")[:-len("/responses")])
         self.config = config
+        self.google_cache = {}
+        self.google_cache_hits = 0
+        self.google_reuse_cache = True
         if any(c in config.api_key for c in "\r\n"):
             raise ValueError("API key chứa ký tự xuống dòng. Hãy dán lại key trên một dòng.")
         url = urllib.parse.urlparse(config.base_url)
@@ -242,6 +268,13 @@ class Client:
                 payload["systemInstruction"] = {"parts": [{"text": system}]}
             if config.json_mode:
                 payload["generationConfig"] = {"responseMimeType": "application/json"}
+        elif config.provider == "openai-responses":
+            url = base + "/responses"
+            payload = {"model": config.model, "stream": False, "store": False,
+                       "instructions": "\n".join(m["content"] for m in messages if m["role"] == "system"),
+                       "input": [dict(m) for m in messages if m["role"] != "system"]}
+            if config.json_mode:
+                payload["text"] = {"format": {"type": "json_object"}}
         else:
             payload = {"model": config.model, "messages": messages, "stream": False}
             url = base + ("/api/chat" if config.provider == "ollama" else "/chat/completions")
@@ -261,7 +294,7 @@ class Client:
             if config.provider == "ollama":
                 payload.update(think=False, keep_alive="5m", options={"temperature": 0, "num_ctx": 8192, "num_predict": 4096})
         result = self._request(url, payload, stop)
-        if not isinstance(result, dict) or "error" in result:
+        if not isinstance(result, dict) or result.get("error") is not None:
             raise ValueError("Dịch vụ không trả kết quả hợp lệ. Kiểm tra quyền model/quota hoặc thử model khác; lô này chưa được lưu.")
         if config.provider == "gemini":
             candidates = result.get("candidates", [])
@@ -271,6 +304,28 @@ class Client:
             if candidate.get("finishReason") != "STOP":
                 raise ValueError("Gemini chưa trả kết quả đầy đủ hoặc đã chặn nội dung. Thử giảm số câu mỗi lô / đổi model.")
             content = "".join(p.get("text", "") for p in candidate.get("content", {}).get("parts", []) if not p.get("thought"))
+        elif config.provider == "openai-responses":
+            if result.get("status") != "completed" or result.get("incomplete_details"):
+                raise ValueError("Responses chưa hoàn tất hoặc bị cắt; lô này chưa lưu. Giảm số câu mỗi lô hoặc kiểm tra model.")
+            output = result.get("output")
+            if not isinstance(output, list):
+                raise ValueError("Responses không có output hợp lệ; lô này chưa lưu.")
+            parts = []
+            for item in output:
+                if not isinstance(item, dict):
+                    raise ValueError("Responses trả output sai cấu trúc.")
+                if item.get("type") != "message" or item.get("role") != "assistant":
+                    continue
+                if item.get("status") not in (None, "completed") or not isinstance(item.get("content"), list):
+                    raise ValueError("Responses trả message chưa hoàn tất hoặc sai cấu trúc.")
+                for part in item["content"]:
+                    if not isinstance(part, dict) or part.get("type") == "refusal":
+                        raise ValueError("Responses từ chối hoặc trả nội dung không hợp lệ; lô này chưa lưu.")
+                    if part.get("type") == "output_text":
+                        if not isinstance(part.get("text"), str):
+                            raise ValueError("Responses trả text sai cấu trúc.")
+                        parts.append(part["text"])
+            content = "".join(parts)
         elif config.provider == "ollama":
             if result.get("done") is False or result.get("done_reason") == "length":
                 raise ValueError("Ollama trả lời bị cắt. Giảm số câu mỗi lô hoặc độ dài câu; lô này chưa lưu.")
@@ -361,36 +416,44 @@ class Client:
         return result["translation"]
 
     def google_web_text(self, text, stop):
-        # Do not ask the web translator to preserve generated placeholders.
-        # Translate only literal segments and join the original markers back.
+        # Only literal segments reach Google; protected names/tokens stay local.
         parts = re.split(r"(__VH[0-9a-f]{8}_\d+__)", text)
         result = []
         for part in parts:
-            if not part or re.fullmatch(r"__VH[0-9a-f]{8}_\d+__", part) or not part.strip():
-                result.append(part)
-                continue
-            value = part.strip()
-            if not any(c.isalpha() for c in value):
-                result.append(part)
-                continue
-            if len(value) > 4000:
-                raise ValueError("Google Dịch web chỉ nhận tối đa 4.000 ký tự mỗi đoạn. Dùng Gemini/Ollama cho câu dài.")
             if stop.is_set():
                 raise InterruptedError("Đã dừng dịch.")
-            if getattr(self, "_google_called", False) and stop.wait(max(2, self.config.delay_seconds)):
-                raise InterruptedError("Đã dừng dịch.")
-            self._google_called = True
-            query = urllib.parse.urlencode({"client": "gtx", "sl": "en", "tl": "vi", "dt": "t", "q": value})
-            response = self._request(GOOGLE_WEB_URL + "/translate_a/single?" + query, None, stop)
-            if not isinstance(response, list) or not response or not isinstance(response[0], list):
-                raise ValueError("Google Dịch web thay đổi phản hồi hoặc chặn truy cập. Thử lại sau hoặc đổi dịch vụ.")
-            rows = response[0]
-            if not rows or any(not isinstance(row, list) or not row or not isinstance(row[0], str) for row in rows):
-                raise ValueError("Google Dịch web trả kết quả không hợp lệ.")
-            translated = "".join(row[0] for row in rows)
-            if not translated.strip():
-                raise ValueError("Google Dịch web trả bản dịch rỗng.")
-            result.append(part[:len(part)-len(part.lstrip())] + translated + part[len(part.rstrip()):])
+            if not part or re.fullmatch(r"__VH[0-9a-f]{8}_\d+__", part) or not any(c.isalpha() for c in part):
+                result.append(part)
+                continue
+            for chunk in google_chunks(part):
+                value = chunk.strip()
+                if not value or not any(c.isalpha() for c in value):
+                    result.append(chunk)
+                    continue
+                key = "en-vi:v1:" + digest(value.encode("utf-8"))
+                cached = self.google_cache.get(key) if self.google_reuse_cache else None
+                if isinstance(cached, str) and not validate(value, cached):
+                    translated = cached
+                    self.google_cache_hits += 1
+                else:
+                    if stop.is_set():
+                        raise InterruptedError("Đã dừng dịch.")
+                    if getattr(self, "_google_called", False) and stop.wait(max(2, self.config.delay_seconds)):
+                        raise InterruptedError("Đã dừng dịch.")
+                    self._google_called = True
+                    query = urllib.parse.urlencode({"client": "gtx", "sl": "en", "tl": "vi", "dt": "t", "q": value})
+                    response = self._request(GOOGLE_WEB_URL + "/translate_a/single?" + query, None, stop)
+                    if not isinstance(response, list) or not response or not isinstance(response[0], list):
+                        raise ValueError("Google Dịch web thay đổi phản hồi hoặc chặn truy cập. Thử lại sau hoặc đổi dịch vụ.")
+                    rows = response[0]
+                    if not rows or any(not isinstance(row, list) or not row or not isinstance(row[0], str) for row in rows):
+                        raise ValueError("Google Dịch web trả kết quả không hợp lệ.")
+                    translated = normalize_translation("".join(row[0] for row in rows))
+                    errors = validate(value, translated)
+                    if errors:
+                        raise ValueError("Google Dịch web trả đoạn không hợp lệ: " + " ".join(errors))
+                    self.google_cache[key] = translated
+                result.append(chunk[:len(chunk)-len(chunk.lstrip())] + translated + chunk[len(chunk.rstrip()):])
         return "".join(result)
 
 
@@ -445,7 +508,7 @@ def translate(project: Project, config: APIConfig, progress=lambda text: None,
     while pending:
         if stop.is_set():
             break
-        if batches and stop.wait(config.delay_seconds):
+        if batches and config.provider != "google-web" and stop.wait(config.delay_seconds):
             break
         batch, chars = [], 0
         while pending and len(batch) < config.batch_size:
@@ -489,7 +552,11 @@ def translate(project: Project, config: APIConfig, progress=lambda text: None,
                 remote_items.append(item)
         if remote_items:
             messages[1]["content"] = json.dumps({"items": remote_items}, ensure_ascii=False)
-            client = client or Client(config)
+            if client is None:
+                client = Client(config)
+                if config.provider == "google-web":
+                    client.google_cache = project.google_web_cache
+                    client.google_reuse_cache = not overwrite
             result = client.complete(messages, stop)
             if isinstance(result, dict) and isinstance(result.get("translations"), list):
                 result["translations"] = result["translations"] + local_rows
@@ -515,5 +582,7 @@ def translate(project: Project, config: APIConfig, progress=lambda text: None,
                 for match in groups[identity(e)]:
                     match.error = str(exc)
         save()
+    if config.provider == "google-web" and client and client.google_cache_hits:
+        progress(f"Google Dịch: dùng lại {client.google_cache_hits} đoạn từ cache project, không gửi yêu cầu cho các đoạn này.")
     progress(f"[{done}/{total}] Đã lưu {done} vị trí dịch. {'Đã dừng theo yêu cầu.' if stop.is_set() else 'Các câu lỗi có thể sửa hoặc dịch lại.'}")
     return done

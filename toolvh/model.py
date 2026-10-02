@@ -46,6 +46,7 @@ class Project:
     preserve_names: bool = True
     protected_names: list[str] = field(default_factory=list)
     game_context: str = ""
+    google_web_cache: dict[str, str] = field(default_factory=dict)
     schema: int = 1
     scan_revision: int = 2
     applied_patch: str = ""
@@ -64,6 +65,8 @@ class Project:
         if data.get("schema") != 1:
             raise ValueError("Phiên bản project không được hỗ trợ.")
         data.setdefault("scan_revision", 0)
+        if not isinstance(data.get("google_web_cache", {}), dict):
+            raise ValueError("Cache Google Dịch trong project không hợp lệ.")
         data["files"] = [FileRecord(**f) for f in data["files"]]
         data["entries"] = [Entry(**e) for e in data["entries"]]
         project = cls(**data)

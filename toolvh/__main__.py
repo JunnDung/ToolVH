@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 from .model import Project
 
 
 def main():
+    # Windows consoles/pipes may default to a code page without Vietnamese.
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="ToolVH — quét và Việt hóa text game")
     sub = parser.add_subparsers(dest="command")
     gui = sub.add_parser("gui")

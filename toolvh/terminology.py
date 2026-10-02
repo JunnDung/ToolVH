@@ -29,6 +29,9 @@ def inferred_names(project):
     names = set(ORI_NAMES if ori_project(project) else ("Steam", "Discord"))
     name_field = re.compile(r"(?<![A-Za-z])(?:location|area|region|character|npc|item|weapon|ability|shard)[_ /.-]*name(?:[_ /.-]|$)", re.I)
     for e in project.entries:
+        speaker = e.locator.get("speaker_name")
+        if isinstance(speaker, str) and 1 <= len(speaker.strip()) <= 70 and not re.search(r"[{}<>\n\r]", speaker):
+            names.add(speaker.strip())
         text = e.source.strip()
         if (name_field.search(e.context) and not re.search(r"description|achievement", e.context, re.I) and 1 <= len(text) <= 70
                 and len(text.split()) <= 8 and not re.search(r"[{}<>\n\r.!?=]", text)
@@ -93,7 +96,11 @@ def context_map(project):
     groups = defaultdict(list)
     for e in project.entries:
         # Never borrow dialogue from a different Unity object or localization table.
-        key = (e.file, e.locator.get("object"), e.locator.get("container"), e.context.rsplit(" / ", 1)[0])
+        scope = e.context.rsplit(" / ", 1)[0]
+        if e.file.lower().endswith(".rpy"):
+            # Dialogue changes speaker within a scene; keep neighbors in its label.
+            scope = re.sub(r" / dòng \d+(?: / đoạn \d+)?$", "", e.context).split(" / ", 1)[0]
+        key = (e.file, e.locator.get("object"), e.locator.get("container"), scope)
         groups[key].append(e)
     result = {}
     for group in groups.values():

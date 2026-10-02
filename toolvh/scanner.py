@@ -25,6 +25,7 @@ def carry_translations(previous, current):
     current.preserve_names = previous.preserve_names
     current.protected_names = list(previous.protected_names)
     current.game_context = previous.game_context
+    current.google_web_cache = dict(previous.google_web_cache)
     current.font_patches = list(previous.font_patches)
     old = {entry.id: entry for entry in previous.entries}
     from collections import defaultdict

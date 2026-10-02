@@ -1,6 +1,6 @@
 # ToolVH
 
-Ứng dụng GUI trên Windows giúp quét text tiếng Anh trong thư mục game, dịch sang tiếng Việt, duyệt bản dịch và cài bản vá có sao lưu. Phiên bản hiện tại: **0.7.2**. Mã nguồn được cấp phép theo [Apache-2.0](LICENSE).
+Ứng dụng GUI trên Windows giúp quét text tiếng Anh trong thư mục game, dịch sang tiếng Việt, duyệt bản dịch và cài bản vá có sao lưu. Phiên bản hiện tại: **0.7.5**. Mã nguồn được cấp phép theo [Apache-2.0](LICENSE).
 
 ToolVH hỗ trợ nhiều định dạng, nhưng **chưa thể Việt hóa mọi game**. Khả năng quét, cài bản dịch và sửa font phụ thuộc cấu trúc dữ liệu của từng game; cần kiểm tra kết quả trong game trước khi chia sẻ bản vá.
 
@@ -23,14 +23,14 @@ ToolVH hỗ trợ nhiều định dạng, nhưng **chưa thể Việt hóa mọi
 | Godot | PCK rời v1–v3 không mã hóa; CSV/JSON, gettext PO/MO UTF-8, trường text của TSCN, Translation TRES dạng text và Godot 4 Translation RSRC v5/v6 little-endian một resource. |
 | Unreal Engine | LOCRES rời v0–v3 hoặc LOCRES không nén trong PAK v1–v7 không mã hóa, không có chữ ký. Giữ namespace, key và hash nguồn. |
 | RPG Maker MV/MZ | JSON database trong `data/` khi nhận diện được core engine; tên, mô tả, thuật ngữ và lệnh sự kiện hiển thị thoại/lựa chọn. Không sửa script, plugin command hoặc trường note. |
-| Ren’Py | Source/template RPY: thoại và menu một dòng, cặp old/new của template English. Không thực thi Python hoặc sửa logic game. |
+| Ren’Py | Source/template RPY: thoại thường/nhiều dòng, thuộc tính nhân vật, `extend`, menu có điều kiện, say arguments và cặp old/new English. Monologue triple quote được tách từng khối, giữ điểm ngắt thoại. Không thực thi Python hoặc sửa logic game. |
 
 **Các giới hạn đáng chú ý:**
 
 - Unity thiếu type tree hoặc schema chưa nhận diện; Addressables remote/cache, catalog đóng trong bundle và cấu trúc dependency chưa hỗ trợ có thể bị chặn.
 - Godot PCK mã hóa/sparse/v4 hoặc nhúng trong EXE; RSCC, OptimizedTranslation, scene binary và RSRC ngoài schema đã hỗ trợ. PO/MO chưa hỗ trợ đầy đủ plural; PO fuzzy/obsolete được bỏ qua. File nguồn có `.import`/`.remap` có thể bị bỏ qua vì game đọc tài nguyên đã nhập.
 - Unreal PAK v8+, gói nén/mã hóa/có chữ ký, IoStore (`.utoc`, `.ucas`) và text trong UASSET chưa hỗ trợ cài bản dịch.
-- Ren’Py RPA/RPYC, chuỗi nhiều dòng và cú pháp ngoài phạm vi bộ đọc chưa hỗ trợ.
+- Ren’Py RPA/RPYC, raw/backtick strings, speaker dạng biểu thức phức tạp, screen UI/Python, triple quote trong old/new và chế độ `rpy monologue none` chưa hỗ trợ. Các khối bị bỏ qua không được coi là đã dịch.
 
 Tên engine được nhận diện không có nghĩa toàn bộ text trong game đã được tìm thấy. Các mục thiếu thông tin locale cần được xác nhận là tiếng Anh trước khi dịch.
 
@@ -84,6 +84,16 @@ Giữ gói xuất bên ngoài game. Để khôi phục thủ công, đóng game 
 
 Chép thủ công không kiểm tra phiên bản hoặc ghi nhận bản vá trong project. Chỉ dùng cho bản game đã quét; khôi phục trước khi quét lại. Gói text không tự kèm bản vá font riêng. Với chữ thiếu dấu hoặc ô vuông, dùng **Kiểm tra / sửa font** và kiểm tra kết quả trong game.
 
+## Visual novel dùng Ren’Py
+
+Chọn thư mục gốc game, quét các file `.rpy`, xác nhận nguồn English và chọn câu cần dịch. Nếu script không có thông tin locale, câu mặc định chưa được chọn; kiểm tra ngôn ngữ trước khi chọn hàng loạt.
+
+Tool lấy lời thoại và lựa chọn, bổ sung label/người nói/thuộc tính vào ngữ cảnh. Tên người nói dạng chuỗi được giữ nguyên và được thêm vào danh sách bảo vệ khi xuất hiện trong thoại. Ngữ cảnh lân cận có thể đi qua người nói khác trong cùng label, không lấy thoại ở label khác. Với monologue triple quote mặc định, mỗi khối ngăn bằng dòng trống là một câu dịch riêng để giữ lượt thoại. Giữ nguyên `[player]`, `{b}`, `{w}` và các biến/thẻ của Ren’Py trong bản dịch.
+
+Dùng **Xuất để chép…** rồi chép nội dung `files/` vào đúng thư mục game. Kiểm tra game nạp script, ngắt thoại, lựa chọn và font. Bộ kiểm thử hiện xác minh parser, đọc lại, xuất/cài/khôi phục trên script tổng hợp; chưa kiểm tra compile/load với Ren’Py runtime hoặc visual novel thương mại.
+
+Game chỉ có `.rpa`/`.rpyc` cần adapter đóng gói/biên dịch khác; tool chưa tự giải mã hoặc ghi lại các định dạng này. KiriKiri/KAG, NScripter và engine visual novel khác cũng chưa có adapter riêng. Xem [tài liệu thoại Ren’Py](https://www.renpy.org/doc/html/dialogue.html) và [quy tắc chuỗi](https://www.renpy.org/doc/html/language_basics.html) cho cú pháp.
+
 ## Dịch vụ dịch
 
 | Dịch vụ | Cấu hình |
@@ -92,6 +102,7 @@ Chép thủ công không kiểm tra phiên bản hoặc ghi nhận bản vá tro
 | Groq | Key tại [Groq Console](https://console.groq.com/keys); dùng endpoint preset của tool. |
 | OpenRouter free | Key tại [OpenRouter](https://openrouter.ai/settings/keys); preset chỉ chấp nhận model `:free` hoặc `openrouter/free`. |
 | API tương thích OpenAI | Nhập base URL, model và key theo nhà cung cấp. |
+| API Responses | Nhập base URL/model/key; nhận diện URL kết thúc `/responses`, đọc `output` hoàn tất và dùng `text.format` khi bật JSON mode. Không tự chuyển dịch vụ. |
 | Ollama local | Cài Ollama, tải model và chạy dịch vụ; URL mặc định `http://localhost:11434`, không cần key cho dịch vụ local. |
 | Google Dịch web | Không cần key/model; tính năng thử nghiệm, endpoint có thể bị giới hạn hoặc thay đổi. |
 
@@ -99,7 +110,17 @@ Hạn mức và chi phí phụ thuộc nhà cung cấp và tài khoản; tool kh
 
 API nhận text được chọn để dịch. Key được giữ trong phiên hoặc mã hóa bằng Windows DPAPI nếu chọn lưu. Không đưa key, cấu hình cá nhân, project hay dữ liệu trích xuất từ game vào Git.
 
+Từ màn hình **Bắt đầu**, bấm **Chọn Google Dịch miễn phí**, kiểm tra kết nối rồi dịch thử. Nút chỉ chọn dịch vụ, chưa gửi text hoặc tự chuyển sang API trả phí. Ollama là lựa chọn chạy local khi không muốn phụ thuộc dịch vụ web.
+
+Google Dịch web lưu cache từng đoạn trong project để giảm yêu cầu cho nội dung lặp lại; tự chia đoạn dài tại ranh giới câu/từ, giữ biến/thẻ và khoảng trắng. Chờ giữa các yêu cầu thực tế, không chờ thêm giữa lô. **Dịch lại các câu đã chọn** bỏ qua cache; **Xóa cache Google Dịch** xóa cache mà không xóa bản dịch (lưu project sau khi xóa). Cache không dùng chung giữa các game và không thay thế việc duyệt chất lượng.
+
 Google Dịch web áp dụng bảo vệ tên và glossary cục bộ, nhưng không dùng ngữ cảnh/văn phong project như model AI. Với mọi dịch vụ, cần duyệt bản dịch trước khi cài.
+
+## API Responses và tốc độ
+
+Chọn **API Responses (tương thích OpenAI)** trong Cấu hình, nhập URL/model/key, tải model nếu endpoint hỗ trợ và bấm **Kiểm tra kết nối**. URL có thể là base URL `/v1` hoặc URL đầy đủ kết thúc `/responses`. Trong preset API tương thích OpenAI, dán URL đầy đủ `/responses` cũng tự chọn giao thức Responses. Tool gửi `instructions`, `input`, `store: false` và đọc text trong `output` theo [OpenAI Docs](https://developers.openai.com/api/docs/guides/migrate-to-responses). Không lấy API key từ tài khoản ChatGPT hoặc tự đăng nhập; chi phí/quota theo nhà cung cấp.
+
+Bấm **Tối ưu tốc độ** để đặt số câu mỗi lô và thời gian nghỉ phù hợp preset: API cloud thông thường 40 câu/0 giây, Groq/OpenRouter free 10 câu/2 giây, Ollama tối đa 5 câu/0 giây, Google Dịch 1 câu/2 giây với cache. Đây là cấu hình giảm số lượt gọi/chờ, không cam kết nhanh hơn mọi model; nếu bị cắt kết quả hoặc 429, giảm số câu hoặc tăng thời gian nghỉ. Giới hạn độ dài lô, ngữ cảnh, glossary, tên riêng và kiểm tra biến/thẻ vẫn được giữ. Nút chỉ thay cấu hình, chưa gửi request.
 
 ## Ngữ cảnh và tên riêng
 
@@ -129,6 +150,8 @@ Chạy kiểm thử từ môi trường đã cài phụ thuộc:
 .\.venv\Scripts\python.exe -m scripts.gui_terminology_smoke
 .\.venv\Scripts\python.exe -m scripts.gui_fonts_smoke
 .\.venv\Scripts\python.exe -m scripts.gui_preflight_smoke
+.\.venv\Scripts\python.exe -m scripts.gui_google_cache_smoke
+.\.venv\Scripts\python.exe -m scripts.gui_responses_smoke
 ```
 
 Kiểm thử dùng dữ liệu tổng hợp và mock API; không cần game thương mại hoặc API key. Kiểm thử GUI chạy offscreen; kiểm thử DPAPI cần môi trường Windows.
