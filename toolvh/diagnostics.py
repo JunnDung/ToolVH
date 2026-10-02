@@ -46,5 +46,6 @@ def report_text(project: Project):
         lines.append(f"{r['files_with_missing_type_tree']} file có MonoBehaviour thiếu type tree; phần dữ liệu này chưa được trích xuất.")
     if r["read_errors"]:
         lines.append(f"{r['read_errors']} file bị lỗi đọc; xem Nhật ký.")
+    lines.append("Khả năng cài: bấm Kiểm tra khả năng cài để thử writer/catalog trước khi dịch; kết quả chỉ áp dụng các câu đã chọn.")
     lines.append("Font và bố cục: cần kiểm tra trong game sau khi cài thử bản vá.")
     return "\n".join(lines)

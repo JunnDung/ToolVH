@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication
 from toolvh.gui import MainWindow, configure_app
-from toolvh.formats import extract
+from toolvh.scanner import scan
 from toolvh.model import Project
 from toolvh.translation import Client, GEMINI_BASE_URL
 
@@ -60,7 +60,10 @@ with tempfile.TemporaryDirectory(prefix="gui-api-") as directory:
     window.save_api_settings()
     assert "dummy-ui-secret" not in (root / "settings.json").read_text()
 
-    project = Project(str(root), entries=extract(json.dumps([f"Start game number {i}" for i in range(12)]), "json", "localization.en.json"))
+    game = root / "game"
+    game.mkdir()
+    (game / "localization.en.json").write_text(json.dumps([f"Start game number {i}" for i in range(12)]), encoding="utf-8")
+    project = scan(game)
     window.project_path = root / "test.toolvh.json"
     window.set_project(project)
     window.delay_seconds.setValue(0)

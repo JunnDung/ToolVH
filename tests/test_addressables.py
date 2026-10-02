@@ -1,10 +1,11 @@
 import json
+import base64
 import shutil
 import struct
 import tempfile
 import unittest
 from pathlib import Path
-from toolvh.addressables import BinaryCatalog, bundle_crc, update_catalog, catalog_updates
+from toolvh.addressables import BinaryCatalog, bundle_crc, update_catalog, update_json_catalog, catalog_updates
 from toolvh.patching import install_patch
 from toolvh.model import digest
 from synthetic_addressables import make_fixture, bundle
@@ -99,3 +100,79 @@ class AddressablesTest(unittest.TestCase):
             self.assertEqual(install_patch(patch, game, restore=True), 2)
             self.assertEqual((game / aa / "catalog.bin").read_bytes(), self.catalog)
             self.assertEqual((game / self.relative).read_bytes(), self.original)
+
+
+class JsonAddressablesTest(unittest.TestCase):
+    def fixture(self, original, uwr=False):
+        options = {"m_Crc": bundle_crc(original), "m_BundleSize": len(original),
+                   "m_Hash": "0123456789abcdef0123456789abcdef", "m_UseUWRForLocalBundles": uwr}
+        assembly = b"Unity.ResourceManager"
+        cls = b"UnityEngine.ResourceManagement.ResourceProviders.AssetBundleRequestOptions"
+        value = json.dumps(options).encode("utf-16-le")
+        extra = bytes([7, len(assembly)]) + assembly + bytes([len(cls)]) + cls + struct.pack("<i", len(value)) + value
+        entries = struct.pack("<i14i", 2, 0, 0, -1, 0, 0, 0, 0, 1, 1, -1, 0, -1, 0, 0)
+        data = {"m_InternalIds": ["{UnityEngine.AddressableAssets.Addressables.RuntimePath}/StandaloneWindows64/english.bundle", "other.asset"],
+                "m_ProviderIds": ["UnityEngine.ResourceManagement.ResourceProviders.AssetBundleProvider", "BundledAssetProvider"],
+                "m_EntryDataString": base64.b64encode(entries).decode(),
+                "m_ExtraDataString": base64.b64encode(extra).decode(), "m_KeyDataString": "unchanged"}
+        return json.dumps(data).encode(), options
+
+    def test_json_options_preserve_other_records(self):
+        original, modified = bundle(b"English"), bundle("Tiếng Việt".encode())
+        data, options = self.fixture(original)
+        output = update_json_catalog(data, {"english.bundle": (original, modified)})
+        before, after = json.loads(data), json.loads(output)
+        oldextra = base64.b64decode(before["m_ExtraDataString"])
+        extra = base64.b64decode(after["m_ExtraDataString"])
+        self.assertTrue(extra.startswith(oldextra))
+        entries = base64.b64decode(after["m_EntryDataString"])
+        self.assertEqual(entries[32:], base64.b64decode(before["m_EntryDataString"])[32:])
+        replacement = extra[len(oldextra):]
+        offset = 2 + replacement[1]
+        offset += 1 + replacement[offset]
+        length, = struct.unpack_from("<i", replacement, offset)
+        value = json.loads(replacement[offset + 4:offset + 4 + length].decode("utf-16-le"))
+        self.assertEqual(value, dict(options, m_Crc=bundle_crc(modified), m_BundleSize=len(modified)))
+        for key in before.keys() - {"m_ExtraDataString", "m_EntryDataString"}:
+            self.assertEqual(before[key], after[key])
+
+    def test_json_rejects_wrong_crc_cache_and_truncated_table(self):
+        original, modified = bundle(b"English"), bundle(b"Vietnamese")
+        data, _ = self.fixture(original)
+        with self.assertRaisesRegex(ValueError, "CRC nguồn"):
+            update_json_catalog(data, {"english.bundle": (modified, original)})
+        data, _ = self.fixture(original, uwr=True)
+        with self.assertRaisesRegex(ValueError, "UnityWebRequest"):
+            update_json_catalog(data, {"english.bundle": (original, modified)})
+        parsed = json.loads(data)
+        parsed["m_EntryDataString"] = base64.b64encode(b"12345").decode()
+        with self.assertRaisesRegex(ValueError, "location"):
+            update_json_catalog(json.dumps(parsed).encode(), {})
+
+    def test_json_install_retry_restore(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            patch, relative, original, modified, *_ = make_fixture(root)
+            game = root / "game"
+            aa = Path(relative).parent.parent
+            (game / Path(relative).parent).mkdir(parents=True)
+            (game / relative).write_bytes(original)
+            data, _ = self.fixture(original)
+            (game / aa / "catalog.json").write_bytes(data)
+            settings = {"m_CatalogLocations": [{"m_InternalId": "{runtime}/catalog.json", "m_Dependencies": []}]}
+            (game / aa / "settings.json").write_text(json.dumps(settings))
+            with self.assertRaisesRegex(ValueError, "catalog CRC"):
+                install_patch(patch, game)
+            self.assertEqual((game / relative).read_bytes(), original)
+            updates = catalog_updates(game, {relative: (original, modified)})
+            manifest = json.loads((patch / "manifest.json").read_text())
+            for path, (source, translated) in updates.items():
+                (patch / "backup" / path).write_bytes(source)
+                (patch / "files" / path).write_bytes(translated)
+                manifest["files"].append({"path": path, "original_sha256": digest(source), "patched_sha256": digest(translated)})
+            (patch / "manifest.json").write_text(json.dumps(manifest))
+            self.assertEqual(install_patch(patch, game), 2)
+            self.assertEqual(install_patch(patch, game), 0)
+            self.assertEqual(install_patch(patch, game, restore=True), 2)
+            self.assertEqual((game / aa / "catalog.json").read_bytes(), data)
+            self.assertEqual((game / relative).read_bytes(), original)

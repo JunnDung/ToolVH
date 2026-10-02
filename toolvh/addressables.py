@@ -1,4 +1,4 @@
-"""Targeted CRC updates for Unity Addressables binary catalog version 2.
+"""Targeted CRC updates for local Unity Addressables binary v2 and JSON catalogs.
 
 Layout follows Unity's ContentCatalogData and BinaryStorageBuffer serializers.
 No search-and-replace of arbitrary CRC bytes; resolve provider/options by pointers.
@@ -6,6 +6,7 @@ No search-and-replace of arbitrary CRC bytes; resolve provider/options by pointe
 from __future__ import annotations
 
 import struct
+import base64
 import json
 import zlib
 from pathlib import Path
@@ -112,6 +113,71 @@ def update_catalog(data: bytes, changes: dict[str, tuple[bytes, bytes]]) -> byte
     return bytes(output)
 
 
+def update_json_catalog(data: bytes, changes: dict[str, tuple[bytes, bytes]]) -> bytes:
+    """Unity JSON catalog: seven int32s per location, typed UTF-16 options.
+
+    Append replacement options so unrelated offsets and serialized objects stay intact.
+    Layout: ContentCatalogData.CreateLocator / SerializationUtilities.JsonObject.
+    """
+    catalog = json.loads(data.decode("utf-8-sig"))
+    entries = bytearray(base64.b64decode(catalog["m_EntryDataString"], validate=True))
+    extra = bytearray(base64.b64decode(catalog["m_ExtraDataString"], validate=True))
+    if len(entries) < 4:
+        raise ValueError("Bảng location JSON catalog bị thiếu.")
+    count, = struct.unpack_from("<i", entries)
+    if count < 0 or len(entries) != 4 + count * 28:
+        raise ValueError("Kích thước bảng location JSON catalog không hợp lệ.")
+    bundles = []
+    for i in range(count):
+        offset = 4 + i * 28
+        internal, provider, _, _, options, _, _ = struct.unpack_from("<7i", entries, offset)
+        if not 0 <= provider < len(catalog["m_ProviderIds"]):
+            raise ValueError("Provider JSON catalog nằm ngoài dữ liệu.")
+        if not catalog["m_ProviderIds"][provider].endswith(".AssetBundleProvider"):
+            continue
+        if not 0 <= internal < len(catalog["m_InternalIds"]):
+            raise ValueError("Internal ID JSON catalog nằm ngoài dữ liệu.")
+        if not 0 <= options < len(extra) or extra[options] != 7:
+            raise ValueError("Options JSON catalog chưa hỗ trợ.")
+        end = options + 1
+        names = []
+        for _ in range(2):
+            if end >= len(extra) or end + 1 + extra[end] > len(extra):
+                raise ValueError("Tên kiểu JSON catalog vượt giới hạn.")
+            length = extra[end]
+            names.append(bytes(extra[end + 1:end + 1 + length]).decode("ascii"))
+            end += 1 + length
+        if names[1] != "UnityEngine.ResourceManagement.ResourceProviders.AssetBundleRequestOptions":
+            raise ValueError("Kiểu options JSON catalog chưa hỗ trợ.")
+        if end + 4 > len(extra):
+            raise ValueError("Options JSON catalog bị thiếu độ dài.")
+        length, = struct.unpack_from("<i", extra, end)
+        if length < 0 or length % 2 or end + 4 + length > len(extra):
+            raise ValueError("Options JSON catalog vượt giới hạn.")
+        value = json.loads(extra[end + 4:end + 4 + length].decode("utf-16-le"))
+        bundles.append((catalog["m_InternalIds"][internal].replace("\\", "/"),
+                        offset, bytes(extra[options:end]), value))
+    for relative, (original, modified) in sorted(changes.items()):
+        filename = Path(relative).name
+        matches = [item for item in bundles if item[0].endswith("/" + filename)]
+        if len(matches) != 1:
+            raise ValueError(f"Không xác định duy nhất bundle trong JSON catalog: {filename}")
+        path, offset, prefix, value = matches[0]
+        if not path.startswith("{UnityEngine.AddressableAssets.Addressables.RuntimePath}/") or value.get("m_UseUWRForLocalBundles", False):
+            raise ValueError("Chưa hỗ trợ bundle remote/UnityWebRequest/cache trong JSON catalog.")
+        if value["m_Crc"] and value["m_Crc"] != bundle_crc(original):
+            raise ValueError(f"CRC nguồn khác catalog: {filename}. Hãy xác minh file game và quét lại.")
+        if value["m_BundleSize"] != len(original):
+            raise ValueError(f"Kích thước bundle nguồn khác catalog: {filename}")
+        value = dict(value, m_Crc=bundle_crc(modified), m_BundleSize=len(modified))
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-16-le")
+        struct.pack_into("<i", entries, offset + 16, len(extra))
+        extra.extend(prefix + struct.pack("<i", len(encoded)) + encoded)
+    catalog["m_EntryDataString"] = base64.b64encode(entries).decode("ascii")
+    catalog["m_ExtraDataString"] = base64.b64encode(extra).decode("ascii")
+    return json.dumps(catalog, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
 def catalog_updates(root: Path, changes: dict[str, tuple[bytes, bytes]]):
     """Only local, dependency-free catalogs are supported; reject remote cache setups."""
     groups = {}
@@ -127,12 +193,14 @@ def catalog_updates(root: Path, changes: dict[str, tuple[bytes, bytes]]):
         settings = json.loads((root / folder / "settings.json").read_text(encoding="utf-8-sig"))
         locations = settings.get("m_CatalogLocations", [])
         if (len(locations) != 1 or locations[0].get("m_Dependencies")
-                or not locations[0].get("m_InternalId", "").endswith("/catalog.bin")
+                or not locations[0].get("m_InternalId", "").replace("\\", "/").endswith(("/catalog.bin", "/catalog.json"))
                 or "://" in locations[0].get("m_InternalId", "")
                 or settings.get("m_IsLocalCatalogInBundle")):
-            raise ValueError("Chưa hỗ trợ catalog remote/JSON/đóng bundle. Không cài bản vá để tránh màn hình đen.")
-        relative = (folder / "catalog.bin").as_posix()
+            raise ValueError("Chưa hỗ trợ catalog remote/có dependency/đóng bundle. Không cài bản vá để tránh màn hình đen.")
+        catalog_name = locations[0]["m_InternalId"].replace("\\", "/").rsplit("/", 1)[1]
+        relative = (folder / catalog_name).as_posix()
         original = changes[relative][0] if relative in changes else (root / relative).read_bytes()
-        result[relative] = (original, update_catalog(original, bundles))
-        # catalog.hash has no dependency here: the runtime directly reads catalog.bin.
+        updater = update_json_catalog if catalog_name == "catalog.json" else update_catalog
+        result[relative] = (original, updater(original, bundles))
+        # No catalog hash dependency: runtime reads this local catalog directly.
     return result

@@ -100,6 +100,9 @@ def _header_locale(header, fallback):
 
 
 def extract_resource(data, kind, file):
+    if data.startswith((b"RSRC",b"RSCC")):
+        from . import godot_binary
+        return godot_binary.extract(data,file)
     entries = []
     locale = context_locale(file)
     if kind == "mo":
@@ -153,6 +156,9 @@ def extract_resource(data, kind, file):
 
 
 def rebuild_resource(data, kind, entries):
+    if data.startswith((b"RSRC",b"RSCC")):
+        from . import godot_binary
+        return godot_binary.rebuild(data,entries)
     if not entries:
         return data
     if kind == "mo":

@@ -17,7 +17,7 @@ if (-not $OutputDirectory) { $OutputDirectory = Join-Path 'dist' $version }
 & $PythonExecutable -m PyInstaller --noconfirm --distpath $OutputDirectory packaging/ToolVH.spec
 if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
 $packageDirectory = Join-Path $OutputDirectory 'ToolVH'
-foreach ($document in @('LICENSE', 'README.md', 'CHANGELOG.md', 'THIRD_PARTY.md')) {
+foreach ($document in @('LICENSE', 'README.md', 'CHANGELOG.md', 'ROADMAP.md', 'THIRD_PARTY.md')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $document) -Destination $packageDirectory -Force
 }
 # Include the dependency licenses shipped by the installed wheels.

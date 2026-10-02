@@ -17,6 +17,7 @@ from .unity import rebuild_unity
 from .addressables import catalog_updates
 from .godot import RESOURCE_EXTENSIONS, rebuild_pack, rebuild_resource
 from .unreal import rebuild_locres
+from . import rpgmaker, renpy, pak
 
 
 def export_csv(project: Project, path: str | Path):
@@ -52,6 +53,62 @@ def import_csv(project: Project, path: str | Path):
     return len(edits)
 
 
+def prepare_changes(project, groups, progress=lambda text: None):
+    root = Path(project.root).resolve()
+    records = {f.path: f for f in project.files}
+    changes = {}
+    for relative, entries in groups.items():
+        progress(f"Đang đóng gói: {relative}")
+        record = records[relative]
+        original = safe_child(root, relative).read_bytes()
+        if digest(original) != record.sha256:
+            raise ValueError(f"File game đã thay đổi kể từ lần quét: {relative}")
+        if record.kind == "unity":
+            modified = rebuild_unity(original, entries)
+        elif record.kind == "pak":
+            path = safe_child(root, relative)
+            if path.with_suffix(".sig").exists() or Path(str(path) + ".sig").exists():
+                raise ValueError("PAK có chữ ký; chưa hỗ trợ cài lại gói đã ký.")
+            modified = pak.rebuild(original, entries)
+        elif record.kind == "locres":
+            modified = rebuild_locres(original, entries)
+        elif record.kind == "pck":
+            modified = rebuild_pack(original, entries)
+        elif "." + record.kind in RESOURCE_EXTENSIONS:
+            modified = rebuild_resource(original, record.kind, entries)
+        elif record.kind in ("rpgmaker", "rpy"):
+            text, encoding = decode_text(original)
+            adapter = rpgmaker if record.kind == "rpgmaker" else renpy
+            modified = encode_text(adapter.rebuild(text, entries), encoding)
+        else:
+            text, encoding = decode_text(original)
+            modified = encode_text(rebuild(text, record.kind, entries), encoding)
+        changes[relative] = (original, modified)
+    changes.update(catalog_updates(root, changes))
+    return changes
+
+
+def preflight(project, progress=lambda text: None, cancelled=lambda: False):
+    """Exercise real writers with source text, without writing game or calling API."""
+    from dataclasses import replace
+    project.require_current_scan()
+    if project.applied_patch or project.font_patches:
+        raise ValueError("Game đang có bản vá. Khôi phục trước khi chuẩn bị bản dịch mới cho chính game này.")
+    groups = defaultdict(list)
+    for entry in project.entries:
+        if entry.enabled:
+            groups[entry.file].append(replace(entry, translation=entry.source))
+    if not groups:
+        raise ValueError("Chọn text tiếng Anh cần dịch trước khi kiểm tra khả năng cài.")
+    def checked_progress(text):
+        if cancelled():
+            raise InterruptedError("Đã dừng kiểm tra khả năng cài.")
+        progress(text)
+    changes = prepare_changes(project, groups, checked_progress)
+    return {"selected_entries": sum(map(len, groups.values())), "checked_files": list(changes),
+            "status": "Đọc/ghi và catalog đạt; font, bố cục và việc game nạp dữ liệu cần kiểm tra thực tế."}
+
+
 def export_patch(project: Project, destination: str | Path, progress=lambda text: None):
     project.require_current_scan()
     if project.font_patches:
@@ -73,33 +130,13 @@ def export_patch(project: Project, destination: str | Path, progress=lambda text
             groups[e.file].append(e)
     if not groups:
         raise ValueError("Chưa có bản dịch được chọn để xuất.")
-    records = {f.path: f for f in project.files}
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".toolvh-patch-", dir=destination.parent))
     manifest = {"schema": 1, "game_root": str(root), "files": [],
                 "translated": sum(map(len, groups.values())),
                 "remaining": sum(e.enabled and not e.translation for e in project.entries)}
     try:
-        changes = {}
-        for relative, entries in groups.items():
-            progress(f"Đang đóng gói: {relative}")
-            record = records[relative]
-            original = safe_child(root, relative).read_bytes()
-            if digest(original) != record.sha256:
-                raise ValueError(f"File game đã thay đổi kể từ lần quét: {relative}")
-            if record.kind == "unity":
-                modified = rebuild_unity(original, entries)
-            elif record.kind == "locres":
-                modified = rebuild_locres(original, entries)
-            elif record.kind == "pck":
-                modified = rebuild_pack(original, entries)
-            elif "." + record.kind in RESOURCE_EXTENSIONS:
-                modified = rebuild_resource(original, record.kind, entries)
-            else:
-                text, encoding = decode_text(original)
-                modified = encode_text(rebuild(text, record.kind, entries), encoding)
-            changes[relative] = (original, modified)
-        changes.update(catalog_updates(root, changes))
+        changes = prepare_changes(project, groups, progress)
         for relative, (original, modified) in changes.items():
             atomic_write(safe_child(staging / "files", relative), modified)
             atomic_write(safe_child(staging / "backup", relative), original)
@@ -139,6 +176,8 @@ def install_patch(patch: str | Path, game: str | Path, restore=False):
                 raise ValueError("Bản vá thiếu/sai catalog CRC. Hãy xuất lại bằng ToolVH mới; không cài để tránh màn hình đen.")
     for file in manifest["files"]:
         target = safe_child(game, file["path"])
+        if not restore and target.suffix.lower() == ".pak" and (target.with_suffix(".sig").exists() or Path(str(target) + ".sig").exists()):
+            raise ValueError("PAK có chữ ký; chưa hỗ trợ cài lại gói đã ký.")
         if target in seen:
             raise ValueError("Manifest có đường dẫn trùng.")
         seen.add(target)

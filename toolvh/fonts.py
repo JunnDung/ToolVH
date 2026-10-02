@@ -17,6 +17,10 @@ from .bitmap_fonts import script_matches, parse_bitmap, encode_bitmap, extend_at
 
 VIETNAMESE = set(map(ord, 'ĂÂĐÊÔƠƯăâđêôơưÀÁÃÈÉÌÍÒÓÕÙÚÝàáãèéìíòóõùúý')) | set(range(0x1EA0,0x1EFA))
 
+def icon_name(name):
+    return bool(re.search(r'keyboard|controller|icons?|symbols?',name,re.I))
+
+
 def font_coverage(source):
     data=source if isinstance(source,bytes) else Path(source).read_bytes()
     if len(data)>32*1024*1024:raise ValueError('Font nguồn lớn hơn 32 MB.')
@@ -48,7 +52,7 @@ def _texture_image(obj,root,relative):
 def diagnose(project,progress=lambda _:None,stop=None):
     root=Path(project.root).resolve();required=required_characters(project)
     result={'schema':1,'root':str(root),'required':''.join(chr(c) for c in sorted(required)),
-            'fonts':[],'notes':[], 'engine_limits':'Unity dynamic Font, font TTF/OTF rời và Ori bitmap đã xác nhận. TMP/UE/Godot đóng gói cần adapter atlas/fallback riêng.'}
+            'fonts':[],'notes':[], 'engine_limits':'Unity dynamic Font, font TTF/OTF rời và Ori bitmap đã xác nhận. TMP static SDF một atlas có type tree; TMP dynamic/multi-atlas và UE/Godot cần adapter riêng.'}
     paths={r.path for r in project.files if r.kind=='unity' and r.size<=256*1024*1024}
     # Fonts often live in resources/globalgamemanagers even when no strings were selected there.
     for datafolder in root.glob('*_Data'):
@@ -90,6 +94,26 @@ def diagnose(project,progress=lambda _:None,stop=None):
                         missing=describe_missing(required,coverage),repairable=dynamic and not icon,
                         note='Font icon: giữ nguyên.' if icon else ('Có thể thay TTF nhúng.' if dynamic else 'Font atlas tĩnh cần adapter riêng.')))
                 elif obj.type.name=='MonoBehaviour':
+                    try:
+                        tree=obj.read_typetree()
+                        ref=script_reference(obj,tree,relative)
+                        script=scripts.get(ref,{})
+                        is_tmp=script.get('m_Namespace')=='TMPro' and script.get('m_ClassName')=='TMP_FontAsset' and script.get('m_AssemblyName')=='Unity.TextMeshPro.dll'
+                    except Exception:
+                        is_tmp=False
+                    if is_tmp:
+                        from .tmp_fonts import coverage, support
+                        reason=support(tree)
+                        rec=dict(base,name=tree.get('m_Name','TMP Font'),kind='tmp-static',missing=describe_missing(required,coverage(tree)),repairable=False,note=reason)
+                        if not reason:
+                            pointer=tree['m_AtlasTextures'][0]
+                            atlas=next((o for o in env.objects if o.assets_file.name==obj.assets_file.name and o.path_id==pointer.get('m_PathID') and pointer.get('m_FileID')==0 and o.type.name=='Texture2D'),None)
+                            if atlas is not None:
+                                texture,image=_texture_image(atlas,root,relative)
+                                if texture.m_TextureFormat in (1,4) and image.size==(tree.get('m_AtlasWidth'),tree.get('m_AtlasHeight')):
+                                    rec.update(atlas=atlas.path_id,atlas_sha256=digest(image.tobytes()),dimensions=list(image.size),repairable=not icon_name(rec['name']),note='TMP static SDF: bổ sung glyph vào chỗ trống, giữ atlas và chữ gốc; cần thử trong game.')
+                        result['fonts'].append(rec)
+                        continue
                     raw=obj.get_raw_data()
                     if len(raw)<32:continue
                     try:header=parse_bitmap_header(raw)
@@ -181,6 +205,17 @@ def rebuild_font_asset(data,records,root,relative,required,font_path=None,progre
             if missing:raise ValueError('Font thay thế thiếu ký tự đang dùng: '+''.join(chr(c) for c in sorted(missing))[:150])
             tree['m_FontData']=list(replacement);tree['m_FontNames']=[_font_name(replacement)];obj.save_typetree(tree);modified.add(key)
             details.append({'name':record['name'],'mode':'replace-dynamic'})
+        elif record['kind']=='tmp-static':
+            from .tmp_fonts import extend
+            tree=obj.read_typetree()
+            atlas_key=(record['container'],record['atlas']);atlasobj=objects.get(atlas_key)
+            if atlasobj is None or atlasobj.type.name!='Texture2D':raise ValueError('TMP atlas không tồn tại.')
+            texture,image=_texture_image(atlasobj,root,relative)
+            if digest(image.tobytes())!=record['atlas_sha256']:raise ValueError('TMP atlas đã thay đổi; quét font lại.')
+            updated,output,count=extend(tree,image,chosen,required)
+            if count:
+                obj.save_typetree(updated);texture.set_image(output,target_format=texture.m_TextureFormat,mipmap_count=1);texture.save()
+                modified.update((key,atlas_key));details.append({'name':record['name'],'mode':'extend-tmp-sdf','added':count})
         elif record['kind']=='ori-bitmap':
             parsed=parse_bitmap(obj.get_raw_data())
             if parsed['name'] not in TEXT_FONTS:raise ValueError('Không sửa font icon/ngoại ngữ.')
@@ -217,6 +252,11 @@ def rebuild_font_asset(data,records,root,relative,required,font_path=None,progre
         obj=reopened[key]
         if record['kind']=='unity-dynamic':
             if not required<=font_coverage(bytes(obj.read_typetree()['m_FontData'])):raise ValueError('Font reopen thiếu ký tự.')
+        elif record['kind']=='tmp-static':
+            from .tmp_fonts import coverage
+            if not required<=coverage(obj.read_typetree()):raise ValueError('TMP reopen thiếu glyph.')
+            texture,image=_texture_image(reopened[(record['container'],record['atlas'])],root,relative)
+            if tuple(record['dimensions'])!=image.size:raise ValueError('TMP atlas đổi kích thước.')
         else:
             parsed=parse_bitmap(obj.get_raw_data())
             if not required<={r['id'] for r in parsed['ascii']+parsed['other']}:raise ValueError('Bitmap reopen thiếu glyph.')
@@ -232,11 +272,13 @@ def export_font_patch(project,report,selected,destination,font_path=None,progres
     if not selected:raise ValueError('Chọn font có hỗ trợ sửa trước.')
     identities=[(r.get('file'),r.get('container'),r.get('object')) for r in selected if isinstance(r,dict)]
     if len(identities)!=len(set(identities)):raise ValueError('Danh sách font bị trùng.')
+    atlases=[(r.get('file'),r.get('container'),r['atlas']) for r in selected if isinstance(r,dict) and 'atlas' in r]
+    if len(atlases)!=len(set(atlases)):raise ValueError('Các font được chọn dùng chung atlas; hãy sửa từng font và quét lại trước lượt tiếp theo.')
     if any(not isinstance(r,dict) or not r.get('repairable') or r not in report['fonts'] for r in selected):raise ValueError('Danh sách font không hợp lệ hoặc chưa hỗ trợ sửa.')
     required=required_characters(project)
     # Keep signed distance generator bounded, and reject unrenderable surrogate/control text.
     if any(c>65535 or 0xD800<=c<=0xDFFF or c<32 for c in required):raise ValueError('Có ký tự ngoài BMP/điều khiển; cần adapter font riêng.')
-    if any(r['kind']=='ori-bitmap' for r in selected) and any(unicodedata.combining(chr(c)) for c in required):
+    if any(r['kind'] in ('ori-bitmap','tmp-static') for r in selected) and any(unicodedata.combining(chr(c)) for c in required):
         raise ValueError('Bản dịch có dấu kết hợp: bấm Chuẩn hóa Unicode và quét font lại trước.')
     if font_path and not required<=font_coverage(font_path):raise ValueError('Font nguồn không đủ ký tự cho bản dịch.')
     changes={};details=[];groups=defaultdict(list)

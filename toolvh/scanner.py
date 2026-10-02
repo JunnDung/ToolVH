@@ -9,9 +9,10 @@ from .model import FileRecord, Project, digest
 from .unity import extract_unity, resolve_table_entries
 from .godot import RESOURCE_EXTENSIONS, extract_pack, extract_resource
 from .unreal import extract_locres
+from . import rpgmaker, renpy, pak
 
 SKIP_DIRS = {".git", ".venv", "node_modules", "__pycache__", "mono", "managed"}
-BINARY_EXTENSIONS = {".dat", ".bin", ".pak", ".pck", ".rpa", ".db", ".locres", ".uasset", ".bytes", ".utoc", ".ucas"}
+BINARY_EXTENSIONS = {".dat", ".bin", ".pak", ".pck", ".rpa", ".rpyc", ".db", ".locres", ".uasset", ".bytes", ".utoc", ".ucas"}
 UNITY_EXTENSIONS = {".assets", ".bundle", ".unity3d", ".assetbundle"}
 
 
@@ -26,10 +27,22 @@ def carry_translations(previous, current):
     current.game_context = previous.game_context
     current.font_patches = list(previous.font_patches)
     old = {entry.id: entry for entry in previous.entries}
+    from collections import defaultdict
+    old_context, new_context = defaultdict(list), defaultdict(list)
+    def identity(entry):
+        return entry.file, entry.source, entry.context, entry.source_locale
+    for entry in previous.entries:
+        if entry.translation:
+            old_context[identity(entry)].append(entry)
+    for entry in current.entries:
+        new_context[identity(entry)].append(entry)
     carried = 0
     for entry in current.entries:
         match = old.get(entry.id)
-        if match and match.source == entry.source and match.locator == entry.locator and match.translation:
+        if not (match and match.source == entry.source and match.locator == entry.locator and match.translation):
+            candidates = old_context[identity(entry)]
+            match = candidates[0] if len(candidates) == 1 and len(new_context[identity(entry)]) == 1 else None
+        if match and match.translation:
             entry.translation = match.translation
             carried += 1
     return carried
@@ -79,7 +92,7 @@ def scan(root: str | Path, progress=lambda text: None, cancelled=lambda: False,
                 engines.add("Godot")
             if ext in (".godot", ".uproject"):
                 continue
-            if ext not in TEXT_EXTENSIONS | UNITY_EXTENSIONS | BINARY_EXTENSIONS | RESOURCE_EXTENSIONS and ext != "":
+            if ext not in TEXT_EXTENSIONS | UNITY_EXTENSIONS | BINARY_EXTENSIONS | RESOURCE_EXTENSIONS | {".rpy"} and ext != "":
                 continue
             rel = path.relative_to(root).as_posix()
             if ext in TEXT_EXTENSIONS | RESOURCE_EXTENSIONS and any(Path(str(path) + suffix).exists() for suffix in (".import", ".remap")):
@@ -92,14 +105,14 @@ def scan(root: str | Path, progress=lambda text: None, cancelled=lambda: False,
                 with path.open("rb") as stream:
                     header = stream.read(64)
                 unity = is_unity(path, header)
-                if not unity and ext not in TEXT_EXTENSIONS | BINARY_EXTENSIONS | RESOURCE_EXTENSIONS:
+                if not unity and ext not in TEXT_EXTENSIONS | BINARY_EXTENSIONS | RESOURCE_EXTENSIONS | {".rpy"}:
                     continue
                 size = path.stat().st_size
                 if size > max_mb * 1024 * 1024:
                     project.files.append(FileRecord(rel, "skipped", size=size, note=f"Vượt giới hạn {max_mb} MB/file."))
                     continue
                 # Quick scan visits root assets first; bundles are listed for optional deep scan.
-                if not deep and ((unity and header.startswith((b"UnityFS", b"UnityWeb", b"UnityRaw"))) or ext == ".pck"):
+                if not deep and ((unity and header.startswith((b"UnityFS", b"UnityWeb", b"UnityRaw"))) or ext in (".pck", ".pak")):
                     project.files.append(FileRecord(rel, "bundle", size=size, note="Chọn Quét sâu để đọc bundle/PCK."))
                     continue
                 candidates.append((path, rel, size, unity))
@@ -118,12 +131,24 @@ def scan(root: str | Path, progress=lambda text: None, cancelled=lambda: False,
             record.sha256 = digest(data)
             if unity:
                 entries, record.note = extract_unity(data, rel, cancelled, script_registry=scripts)
+            elif record.kind == "pak":
+                if path.with_suffix(".sig").exists() or Path(str(path) + ".sig").exists():
+                    raise ValueError("PAK có chữ ký; chưa hỗ trợ cài lại gói đã ký.")
+                entries, record.note = pak.extract(data, rel, cancelled)
+                if "Unreal Engine" not in project.engines:project.engines.append("Unreal Engine")
             elif record.kind == "locres":
                 entries, record.note = extract_locres(data, rel)
             elif record.kind == "pck":
                 entries, record.note = extract_pack(data, rel, cancelled)
             elif path.suffix.lower() in RESOURCE_EXTENSIONS:
                 entries, record.note = extract_resource(data, record.kind, rel)
+            elif record.kind == "rpy":
+                text, record.encoding = decode_text(data)
+                entries, record.note = renpy.extract(text, rel)
+            elif record.kind == "json" and "RPG Maker MV/MZ" in project.engines and rpgmaker.is_database(rel):
+                text, record.encoding = decode_text(data)
+                record.kind = "rpgmaker"
+                entries, record.note = rpgmaker.extract(text, rel)
             elif path.suffix.lower() in TEXT_EXTENSIONS:
                 text, record.encoding = decode_text(data)
                 entries = extract(text, record.kind, rel)
@@ -138,7 +163,9 @@ def scan(root: str | Path, progress=lambda text: None, cancelled=lambda: False,
                 record.note = ({"pak": "PAK chưa hỗ trợ giải nén/đóng gói. Cần LOCRES rời hoặc adapter container phù hợp.",
                                "utoc": "Unreal IoStore UTOC/UCAS chưa hỗ trợ giải nén/đóng gói.",
                                "ucas": "Unreal IoStore UTOC/UCAS chưa hỗ trợ giải nén/đóng gói.",
-                               "uasset": "UASSET có thể chứa StringTable/FText; chưa hỗ trợ đọc/ghi asset."}.get(record.kind, "Định dạng chưa hỗ trợ ghi lại.")
+                               "uasset": "UASSET có thể chứa StringTable/FText; chưa hỗ trợ đọc/ghi asset.",
+                               "rpa": "Ren’Py RPA chưa hỗ trợ; cần source/template RPY.",
+                               "rpyc": "Ren’Py RPYC chưa hỗ trợ; cần source/template RPY."}.get(record.kind, "Định dạng chưa hỗ trợ ghi lại.")
                                + " " + " | ".join(samples))
                 entries = []
             record.count = len(entries)

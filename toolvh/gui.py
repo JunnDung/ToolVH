@@ -387,6 +387,7 @@ class MainWindow(QMainWindow):
         patch_actions = QHBoxLayout()
         patch_actions.addWidget(self.button("Cài bản vá…", lambda: self.apply_patch(False)))
         patch_actions.addWidget(self.button("Khôi phục bản gốc…", lambda: self.apply_patch(True)))
+        patch_actions.addWidget(self.button("Kiểm tra khả năng cài", self.check_installability))
         patch_actions.addWidget(self.button("Xuất chẩn đoán…", self.export_diagnostics))
         patch_actions.addWidget(self.button("Kiểm tra / sửa font…", self.open_font_manager, primary=True))
         patch_actions.addStretch()
@@ -859,7 +860,12 @@ class MainWindow(QMainWindow):
                 project.save(backup)
             except Exception as exc:
                 return self.error(str(exc))
-        self.run_job(lambda progress: translate(project, config, progress, self.stop, lambda: project.save(path), limit=limit, overwrite=overwrite),
+        def work(progress):
+            from .patching import preflight
+            progress("Kiểm tra đọc/ghi trước khi gửi text tới dịch vụ dịch…")
+            preflight(project, progress, self.stop.is_set)
+            return translate(project, config, progress, self.stop, lambda: project.save(path), limit=limit, overwrite=overwrite)
+        self.run_job(work,
                      lambda count: self.translation_finished(count))
 
     def show_names(self):
@@ -890,6 +896,15 @@ class MainWindow(QMainWindow):
         self.update_metrics()
         self.select_entry()
         self.status.setText(f"Đã lưu {count:,} vị trí dịch trong lượt này. Có thể xem bộ lọc Đã dịch hoặc Có lỗi.")
+
+    def check_installability(self):
+        if not self.project:
+            return self.error("Hãy quét game hoặc mở project trước.")
+        from .patching import preflight
+        def success(result):
+            self.status.setText(result["status"])
+            QMessageBox.information(self, "Khả năng cài", f"Đã kiểm tra {len(result['checked_files'])} file và {result['selected_entries']} câu.\n" + result["status"])
+        self.run_job(lambda progress: preflight(self.project, progress, self.stop.is_set), success)
 
     def export_diagnostics(self):
         if not self.project:

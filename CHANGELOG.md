@@ -1,5 +1,23 @@
 # Thay đổi phiên bản
 
+## 0.7.0
+
+- Kiểm tra thử đọc/ghi, nguồn SHA-256 và catalog trước khi dịch (GUI/CLI); thêm nút Kiểm tra khả năng cài và CLI check.
+- TMP static SDF một atlas: chẩn đoán glyph, bổ sung ký tự, giữ glyph/kerning/pixel gốc và kiểm tra reopen; từ chối schema/font chưa hỗ trợ.
+- Unreal PAK v1–7: đọc/ghi LOCRES không nén trong index không mã hóa; giữ payload khác, cập nhật header/index/SHA1; chặn sidecar chữ ký cả lúc cài.
+- Godot 4 Translation RSRC v5/v6: nguồn/locale, key và UID; hỗ trợ trong PCK; không đoán OptimizedTranslation/RSCC/scene.
+- Adapter RPG Maker MV/MZ và Ren’Py RPY source/template, giữ script, metadata, command và tên riêng.
+- Bảo vệ biến Ren’Py có conversion và escape code RPG Maker.
+- Quét lại giữ bản dịch theo nguồn/ngữ cảnh/locale khớp duy nhất khi vị trí thay đổi; mục trùng hoặc đổi nguồn cần duyệt lại.
+- 156 kiểm thử tự động đạt; thêm kiểm tra GUI preflight chặn API khi nguồn đổi. Adapter mới cần kiểm tra trên game thương mại.
+
+## 0.6.5
+
+- Sửa lỗi chặn xuất/cài bản dịch R.E.P.O. do catalog Addressables dạng JSON cục bộ.
+- Cập nhật đúng CRC và kích thước bundle đã dịch; giữ options khác và các record không liên quan.
+- Kiểm tra nguồn trước khi xuất, kiểm tra catalog trước khi cài, hỗ trợ cài lặp và khôi phục nguyên trạng. Tiếp tục chặn remote/cache và catalog chưa hỗ trợ.
+- Thêm kiểm thử JSON catalog và cài/khôi phục; 140 kiểm thử tự động đạt. Đã xuất và cài 603 câu từ project R.E.P.O.; người dùng đã xác nhận game hoạt động tốt.
+
 ## 0.6.4
 
 - Sửa lỗi thiếu dấu tiếng Việt ở menu và hội thoại Ori: nhận diện font `sakkalMajalla` bị bỏ sót trước đó.

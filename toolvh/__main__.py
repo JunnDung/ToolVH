@@ -22,6 +22,8 @@ def main():
         command = sub.add_parser(name)
         command.add_argument("project")
         command.add_argument("path")
+    check = sub.add_parser("check")
+    check.add_argument("project")
     translation = sub.add_parser("translate")
     translation.add_argument("project")
     from .translation import PROVIDERS
@@ -47,9 +49,15 @@ def main():
             project = scan_game(args.game, print, deep=args.deep, max_mb=args.max_mb)
             project.save(args.out)
             print(f"Saved {args.out}: {len(project.entries)} entries")
+        elif args.command == "check":
+            from .patching import preflight
+            import json
+            print(json.dumps(preflight(Project.load(args.project), print), ensure_ascii=False, indent=2))
         elif args.command == "translate":
             from .translation import APIConfig, PROVIDERS, translate, environment_key
             project = Project.load(args.project)
+            from .patching import preflight
+            preflight(project, print)
             key = environment_key(args.provider)
             config = APIConfig(args.provider, args.base_url or PROVIDERS[args.provider][1], args.model, key, args.batch_size, delay_seconds=args.delay)
             translate(project, config, print, save=lambda: project.save(args.project))
