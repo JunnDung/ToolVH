@@ -89,7 +89,7 @@ def prepare_changes(project, groups, progress=lambda text: None):
 
 
 def preflight(project, progress=lambda text: None, cancelled=lambda: False):
-    """Exercise real writers with source text, without writing game or calling API."""
+    """Exercise source and longer Unicode text without writing game or calling API."""
     from dataclasses import replace
     project.require_current_scan()
     if project.applied_patch or project.font_patches:
@@ -104,9 +104,33 @@ def preflight(project, progress=lambda text: None, cancelled=lambda: False):
         if cancelled():
             raise InterruptedError("Đã dừng kiểm tra khả năng cài.")
         progress(text)
+    progress("Kiểm tra ghi lại câu nguồn…")
     changes = prepare_changes(project, groups, checked_progress)
-    return {"selected_entries": sum(map(len, groups.values())), "checked_files": list(changes),
-            "status": "Đọc/ghi và catalog đạt; font, bố cục và việc game nạp dữ liệu cần kiểm tra thực tế."}
+    checked_files = list(changes)
+    del changes
+    # Preserve source tokens/names while exercising longer UTF-8/UTF-16 payloads.
+    expanded = {
+        relative: [replace(entry, translation=entry.source + " — Tiếng Việt: Đường đến vùng đất mới. "
+                           + "Nội dung mở rộng. " * (len(entry.source) // 16 + 1))
+                   for entry in entries]
+        for relative, entries in groups.items()
+    }
+    checked_progress("Kiểm tra câu tiếng Việt dài hơn nguồn…")
+    prepare_changes(project, expanded, checked_progress)
+    checked_progress("Đã kiểm tra ghi text dài và catalog.")
+    extracted_files = {entry.file for entry in project.entries}
+    untranslated_resources = [
+        {"path": record.path, "kind": record.kind, "note": record.note}
+        for record in project.files
+        if record.path not in extracted_files and record.kind != "metadata"
+    ]
+    return {"selected_entries": sum(map(len, groups.values())), "checked_files": checked_files,
+            "expanded_text_checked": True,
+            "scan_summary": {"candidate_entries": len(project.entries),
+                             "unselected_entries": sum(not entry.enabled for entry in project.entries),
+                             "files_with_text": len(extracted_files),
+                             "files_without_extracted_text": untranslated_resources},
+            "status": "Đọc/ghi câu nguồn, text tiếng Việt dài và catalog đạt; chưa xác nhận đủ text, font, bố cục hoặc game nạp bản vá."}
 
 
 def export_patch(project: Project, destination: str | Path, progress=lambda text: None):
@@ -143,13 +167,28 @@ def export_patch(project: Project, destination: str | Path, progress=lambda text
             manifest["files"].append({"path": relative, "original_sha256": digest(original), "patched_sha256": digest(modified)})
         atomic_write(staging / "manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"))
         atomic_write(staging / "README.txt", (
-            "ToolVH — bản vá tiếng Việt\n\n"
-            "Đóng game trước khi cài. Trong ToolVH chọn Cài bản vá, chọn thư mục này và thư mục game.\n"
-            "Tool kiểm tra SHA-256 trước khi cài. Khôi phục dùng backup và kiểm tra bản đã cài.\n"
-            "files/ chứa các file đã dịch; backup/ chứa bản gốc. Giữ nguyên cả thư mục bản vá.\n"
-            "Bản vá thay text ở ngôn ngữ nguồn; nếu dịch cột English hãy chọn English trong game.\n"
-            "Chưa xác nhận font và hiển thị trong game. Cần thử màn hình menu/hội thoại thực tế.\n"
-            f"Đã dịch: {manifest['translated']}; còn thiếu trong mục đã chọn: {manifest['remaining']}.\n"
+            "ToolVH — bản Việt hóa để chép vào game\n\n"
+            f"Game nguồn: {root.name}\n"
+            "Chỉ dùng cho đúng bản game đã quét. manifest.json ghi SHA-256 bản gốc và bản đã vá.\n\n"
+            "CÁCH CHÉP VÀO GAME\n"
+            "1. Đóng game. Sao lưu các file đích hoặc giữ nguyên thư mục backup/ của gói này.\n"
+            "2. Mở files/, chọn TOÀN BỘ nội dung bên trong và chép vào thư mục gốc của game (nơi có EXE).\n"
+            "3. Giữ cấu trúc thư mục, đồng ý thay thế file. Không chép chính thư mục files/ vào game.\n"
+            "4. Chép cả catalog và bundle nếu có; không chỉ lấy riêng file chứa text.\n"
+            "5. Nếu vá bảng English, chọn English trong game. Kiểm tra menu, hội thoại và font.\n\n"
+            "KHÔI PHỤC\n"
+            "Đóng game rồi chép TOÀN BỘ nội dung bên trong backup/ về thư mục gốc game, thay thế file.\n"
+            "Nếu cài thêm bản vá font sau bản dịch, khôi phục font trước.\n"
+            "Hoặc dùng Báo cáo / Cài đặt trong ToolVH để cài/khôi phục gói có manifest.json này.\n\n"
+            "Chép thủ công không kiểm tra phiên bản/SHA-256 và không tự ghi nhận bản vá trong project.\n"
+            "Không chép lên bản game khác hoặc bản đã cập nhật; dùng Cài vào game trong ToolVH để kiểm tra nguồn.\n"
+            "Sau khi chép, khôi phục trước khi quét lại chính game này. Giữ gói bên ngoài thư mục game.\n"
+            "Gói này chỉ chứa bản vá text và catalog cần thiết, không tự kèm bản vá font riêng.\n"
+            "Nếu chữ thiếu dấu/ô vuông, dùng Kiểm tra / sửa font và kiểm tra hiển thị trong game.\n"
+            "Không bảo đảm đã dịch hết text hoặc mọi game sẽ nạp bản vá.\n\n"
+            f"Đã dịch: {manifest['translated']}; còn thiếu trong mục đã chọn: {manifest['remaining']}.\n\n"
+            "FILE CẦN CHÉP (đường dẫn tương đối từ thư mục gốc game):\n"
+            + "\n".join(file["path"] for file in manifest["files"]) + "\n"
         ).encode("utf-8-sig"))
         os.replace(staging, destination)
     finally:

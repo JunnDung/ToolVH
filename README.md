@@ -1,6 +1,6 @@
 # ToolVH
 
-Ứng dụng GUI trên Windows giúp quét text tiếng Anh trong thư mục game, dịch sang tiếng Việt, duyệt bản dịch và cài bản vá có sao lưu. Phiên bản hiện tại: **0.7.0**. Mã nguồn được cấp phép theo [Apache-2.0](LICENSE).
+Ứng dụng GUI trên Windows giúp quét text tiếng Anh trong thư mục game, dịch sang tiếng Việt, duyệt bản dịch và cài bản vá có sao lưu. Phiên bản hiện tại: **0.7.2**. Mã nguồn được cấp phép theo [Apache-2.0](LICENSE).
 
 ToolVH hỗ trợ nhiều định dạng, nhưng **chưa thể Việt hóa mọi game**. Khả năng quét, cài bản dịch và sửa font phụ thuộc cấu trúc dữ liệu của từng game; cần kiểm tra kết quả trong game trước khi chia sẻ bản vá.
 
@@ -61,13 +61,28 @@ Sau khi cài phụ thuộc, có thể mở bằng `Start-ToolVH.cmd`.
 3. Trong **Cấu hình**, chọn dịch vụ, nhập URL/model/key phù hợp rồi **Kiểm tra kết nối**. Bổ sung ngữ cảnh, tên riêng và thuật ngữ của game.
 4. Dùng **Kiểm tra khả năng cài** trong **Báo cáo / Cài đặt**, rồi **Dịch thử 10 câu** trước khi dịch nhiều. Kiểm tra khả năng cài cũng chạy tự động trước khi dịch.
 5. Duyệt bản dịch, chạy **Kiểm tra bản dịch**, sửa các câu có lỗi và kiểm tra font nếu cần.
-6. Lưu project, đóng game rồi bấm **Cài vào game**, hoặc **Xuất bản vá…** để lưu bản vá riêng. Mở game kiểm tra font, bố cục và ngữ cảnh.
+6. Lưu project, đóng game rồi bấm **Cài vào game**, hoặc **Xuất để chép…** để lưu bản vá riêng. Mở game kiểm tra font, bố cục và ngữ cảnh.
 
-Nếu bản vá thay bảng tiếng Anh, giữ lựa chọn **English** trong game. Kiểm tra khả năng cài không ghi vào game hoặc gọi API; kết quả đạt chỉ xác nhận các vị trí đã chọn có thể đọc/ghi bằng adapter, chưa bảo đảm game sẽ nạp bản vá hoặc hiển thị đúng.
+Nếu bản vá thay bảng tiếng Anh, giữ lựa chọn **English** trong game. Kiểm tra khả năng cài thử cả câu nguồn và câu tiếng Việt dài hơn, đồng thời báo các mục chưa chọn và file chưa trích xuất được text. Bước này không ghi vào game hoặc gọi API; kết quả đạt chỉ xác nhận các vị trí đã chọn có thể đọc/ghi bằng adapter, chưa bảo đảm game sẽ nạp bản vá hoặc hiển thị đúng.
 
 Giữ project và thư mục bản vá chứa `backup/`. **Khôi phục** trả các file đã vá về bản gốc, vẫn giữ bản dịch trong project. Nếu đã cài bản vá font, khôi phục font từ bản mới nhất trước khi khôi phục bản dịch.
 
 Để Việt hóa game khác, chọn thư mục mới rồi quét; không cần khôi phục game cũ. Khi quét lại chính game đang có bản dịch đã cài, cần khôi phục trước để không lấy tiếng Việt làm câu nguồn. Tool chặn cài khi dữ liệu game khác phiên bản lúc quét; bản dịch chỉ được ghép lại khi nguồn, ngữ cảnh và vị trí phù hợp, không tự ghép mục mơ hồ. CSV nhập phải khớp ID và câu nguồn.
+
+## Xuất để chép trực tiếp vào game
+
+Sau khi duyệt bản dịch, bấm **Xuất để chép…** và chọn nơi lưu ngoài thư mục game. Gói xuất gồm:
+
+- `files/`: các file đã vá, giữ đúng đường dẫn tương đối trong game; gồm catalog cần cập nhật nếu có.
+- `backup/`: bản gốc của các file được thay đổi.
+- `manifest.json`: danh sách file và SHA-256 để ToolVH kiểm tra khi cài/khôi phục.
+- `README.txt`: hướng dẫn chép và danh sách file cần thay thế.
+
+Đóng game, mở `files/`, chép **toàn bộ nội dung bên trong** vào thư mục gốc game và đồng ý thay thế. Không chép chính thư mục `files/` vào game, không bỏ riêng catalog/bundle. Khi vá bảng tiếng Anh, chọn English trong game.
+
+Giữ gói xuất bên ngoài game. Để khôi phục thủ công, đóng game và chép nội dung bên trong `backup/` về thư mục gốc; khôi phục bản vá font cài sau bản dịch trước. Có thể dùng chức năng cài/khôi phục bản vá trong **Báo cáo / Cài đặt** với cùng gói này.
+
+Chép thủ công không kiểm tra phiên bản hoặc ghi nhận bản vá trong project. Chỉ dùng cho bản game đã quét; khôi phục trước khi quét lại. Gói text không tự kèm bản vá font riêng. Với chữ thiếu dấu hoặc ô vuông, dùng **Kiểm tra / sửa font** và kiểm tra kết quả trong game.
 
 ## Dịch vụ dịch
 

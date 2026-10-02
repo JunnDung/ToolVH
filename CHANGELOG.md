@@ -1,5 +1,17 @@
 # Thay đổi phiên bản
 
+## 0.7.2
+
+- Làm rõ chức năng Xuất để chép: thư mục files/ giữ đường dẫn game, gồm catalog đã cập nhật và backup riêng.
+- Gói xuất có hướng dẫn chép/khôi phục thủ công, danh sách file và giới hạn phiên bản/font; vẫn tương thích cài/khôi phục bằng ToolVH.
+- Kiểm thử chép thủ công, khôi phục nguyên byte và bundle/catalog Unity đi cùng nhau.
+
+## 0.7.1
+
+- Kiểm tra trước dịch thử cả câu nguồn và tiếng Việt dài hơn để phát hiện writer/catalog không xử lý được dữ liệu mở rộng trước khi gọi API.
+- GUI/CLI báo số text ứng viên, mục chưa chọn và file chưa trích xuất được text; không coi đây là tỷ lệ bao phủ toàn game.
+- Kiểm tra không sửa project, ghi game hoặc tạo bản vá; hỗ trợ dừng giữa các bước.
+
 ## 0.7.0
 
 - Kiểm tra thử đọc/ghi, nguồn SHA-256 và catalog trước khi dịch (GUI/CLI); thêm nút Kiểm tra khả năng cài và CLI check.

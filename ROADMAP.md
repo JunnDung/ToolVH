@@ -2,9 +2,9 @@
 
 Mục tiêu là mở rộng theo định dạng đã kiểm chứng, không cam kết mọi game. Nhận diện engine, đọc text, ghi dữ liệu và game nạp bản vá là bốn kết quả khác nhau.
 
-| Công việc | 0.7.0 | Điều kiện để mở rộng tiếp |
+| Công việc | 0.7.1 | Điều kiện để mở rộng tiếp |
 |---|---|---|
-| Kiểm tra trước dịch | Có thử writer/catalog, SHA-256, không gọi API khi bị chặn | Báo cáo mức bao phủ theo tài nguyên runtime và thử dịch dài hơn nguồn |
+| Kiểm tra trước dịch | Thử writer/catalog với câu nguồn và tiếng Việt dài hơn; SHA-256; báo mục chưa chọn/file chưa trích xuất | Lần theo tài nguyên runtime thực sự được game nạp và kiểm tra layout/font trong game |
 | TextMeshPro | Static SDF một atlas có type tree | Fixture và game cho dynamic/fallback/multi-atlas, shader khác và atlas external |
 | Unreal PAK | LOCRES không nén, v1–7 không mã hóa/có chữ ký | Versioned fixtures cho nén, v8+, mount/patch priority và kiểm thử game |
 | Godot binary | Translation RSRC Godot 4 v5/v6 trong/ngoài PCK | RSCC compression, OptimizedTranslation, scene binary, plural và PCK embedded |

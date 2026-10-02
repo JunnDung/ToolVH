@@ -267,7 +267,7 @@ class MainWindow(QMainWindow):
         actions.addStretch()
         actions.addWidget(self.button("Dịch thử 10 câu", lambda: self.start_translation(limit=10)))
         actions.addWidget(self.button("Dịch các câu đã chọn", self.start_translation, primary=True))
-        actions.addWidget(self.button("Xuất bản vá…", self.start_export, primary=True))
+        actions.addWidget(self.button("Xuất để chép…", self.start_export, primary=True))
         actions.addWidget(self.button("Cài vào game", self.apply_current_project, primary=True))
         actions.addWidget(self.button("Khôi phục", self.restore_current_project))
         layout.addLayout(actions)
@@ -903,7 +903,15 @@ class MainWindow(QMainWindow):
         from .patching import preflight
         def success(result):
             self.status.setText(result["status"])
-            QMessageBox.information(self, "Khả năng cài", f"Đã kiểm tra {len(result['checked_files'])} file và {result['selected_entries']} câu.\n" + result["status"])
+            summary = result["scan_summary"]
+            missing = summary["files_without_extracted_text"]
+            details = (f"Đã kiểm tra {len(result['checked_files'])} file và {result['selected_entries']} câu.\n"
+                       f"Có {summary['candidate_entries']} text ứng viên; {summary['unselected_entries']} mục chưa chọn.\n"
+                       f"{len(missing)} file được ghi nhận chưa trích xuất được text (có thể không chứa text).\n\n")
+            details += "\n".join(f"{record['path']}: {record['note'] or 'Không tìm thấy text'}" for record in missing[:8])
+            if len(missing) > 8:
+                details += "\n… Xem đầy đủ trong báo cáo hỗ trợ engine hoặc CLI check."
+            QMessageBox.information(self, "Khả năng cài", details + "\n\n" + result["status"])
         self.run_job(lambda progress: preflight(self.project, progress, self.stop.is_set), success)
 
     def export_diagnostics(self):
@@ -954,7 +962,7 @@ class MainWindow(QMainWindow):
         from datetime import datetime
         destination = Path(parent) / ("ToolVH-patch-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
         self.run_job(lambda progress: export_patch(self.project, destination, progress),
-                     lambda result: QMessageBox.information(self, "Đã xuất bản vá", f"{destination}\n\nĐã dịch {result['translated']} câu; còn thiếu {result['remaining']} câu đã chọn.\nMở tab Báo cáo & cài đặt để cài thử."), cancellable=False)
+                     lambda result: QMessageBox.information(self, "Đã xuất bản vá", f"{destination}\n\nĐã dịch {result['translated']} câu; còn thiếu {result['remaining']} câu đã chọn.\n\nĐóng game, chép toàn bộ nội dung BÊN TRONG files/ vào thư mục gốc game và thay thế file. Giữ cả catalog/bundle nếu có.\nGiữ backup/ để khôi phục. Đọc README.txt trong gói trước khi chép.\n\nChỉ dùng đúng phiên bản game đã quét; bản vá font cần cài riêng."), cancellable=False)
 
     def apply_current_project(self):
         if not self.project:
