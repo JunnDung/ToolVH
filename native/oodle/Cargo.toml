@@ -1,0 +1,16 @@
+[package]
+name = "toolvh-oodle"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+oozextract = "=0.5.5"
+
+[profile.release]
+opt-level = 3
+panic = "abort"
+strip = true

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import http.client
 import re
 import threading
 import urllib.error
@@ -236,7 +237,7 @@ class Client:
                     wait_seconds = 2 ** (attempt + 1)
                 if stop.wait(wait_seconds):
                     raise InterruptedError("Đã dừng dịch.")
-            except (urllib.error.URLError, TimeoutError) as exc:
+            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as exc:
                 if config.provider == "ollama":
                     raise RuntimeError("Ollama chưa phản hồi hoặc quá thời gian chờ. Kiểm tra Ollama đang chạy, tải model và thử lô nhỏ hơn. Tiến độ đã lưu được giữ.") from exc
                 if attempt == 2:
@@ -457,8 +458,66 @@ class Client:
         return "".join(result)
 
 
+def translation_rows(result, ids):
+    rows = result.get("translations") if isinstance(result, dict) else None
+    if not isinstance(rows, list) or any(not isinstance(r, dict) or not isinstance(r.get("id"), str) or not isinstance(r.get("text"), str) for r in rows):
+        raise ValueError("API không trả về danh sách translations đúng định dạng.")
+    received = {r["id"]: r["text"] for r in rows}
+    if len(received) != len(rows) or set(received) != set(ids):
+        raise ValueError("API trả thiếu, thừa hoặc trùng ID; lô này chưa được lưu.")
+    return received
+
+
+def recover_ollama(client, instruction, item, prefix, check, stop):
+    """One sentence retry, then bounded literal-only recovery; never guess token positions."""
+    def request(rows):
+        if stop.is_set() or stop.wait(client.config.delay_seconds):
+            raise InterruptedError("Đã dừng dịch.")
+        result = client.complete([{"role": "system", "content": instruction},
+                                  {"role": "user", "content": json.dumps({"items": rows}, ensure_ascii=False)}], stop)
+        return translation_rows(result, [row["id"] for row in rows])
+
+    try:
+        return check(request([item])[item["id"]])
+    except ValueError:
+        pass
+    parts = re.split("(" + re.escape(prefix) + r"\d+__)", item["text"])
+    rows = []
+    for index, part in enumerate(parts):
+        if not part or re.fullmatch(re.escape(prefix) + r"\d+__", part) or not any(c.isalpha() for c in part):
+            continue
+        rows.append(dict(item, id=str(index), text=part.strip(), full_sentence_context=item["text"],
+                         note="Translate only text, a fragment of full_sentence_context. Do not output the full sentence or protected tokens."))
+    if len(parts) == 1 or len(rows) > 64 or len(item["text"]) > 16000:
+        raise ValueError("Ollama vẫn trả câu sai hoặc vượt giới hạn phục hồi (64 đoạn/16.000 ký tự). Cần sửa tay hoặc đổi model; bản dịch cũ được giữ.")
+    while rows:
+        batch, chars = [], 0
+        while rows and len(batch) < 5:
+            if batch and chars + len(rows[0]["text"]) > 1500:
+                break
+            row = rows.pop(0)
+            batch.append(row)
+            chars += len(row["text"])
+        try:
+            targets = request(batch)
+        except ValueError:
+            if len(batch) == 1:
+                raise
+            targets = {}
+            for row in batch:
+                targets.update(request([row]))
+        for row in batch:
+            target = normalize_translation(targets[row["id"]]).strip()
+            if not target or "__VH" in target or validate(row["text"], target):
+                raise ValueError("Ollama trả đoạn phục hồi sai. Cần sửa tay hoặc đổi model; bản dịch cũ được giữ.")
+            index = int(row["id"])
+            part = parts[index]
+            parts[index] = part[:len(part)-len(part.lstrip())] + target + part[len(part.rstrip()):]
+    return check("".join(parts))
+
+
 def translate(project: Project, config: APIConfig, progress=lambda text: None,
-              stop=None, save=lambda: None, limit=None, overwrite=False):
+              stop=None, save=lambda: None, limit=None, overwrite=False, only_errors=False):
     project.require_current_scan()
     stop = stop or threading.Event()
     if stop.is_set():
@@ -474,7 +533,7 @@ def translate(project: Project, config: APIConfig, progress=lambda text: None,
         from dataclasses import replace
         config = replace(config, batch_size=min(config.batch_size, 5))
         progress("Ollama: tối đa 5 câu/lô, tắt suy luận, dùng ID ngắn và lưu sau mỗi lô.")
-    pending = [e for e in project.entries if e.enabled and (overwrite or not e.translation)]
+    pending = [e for e in project.entries if e.enabled and (bool(e.error) if only_errors else (overwrite or not e.translation))]
     if limit is not None:
         pending = pending[:limit]
     # Reuse only exact source AND context matches, never ambiguous short words.
@@ -484,7 +543,7 @@ def translate(project: Project, config: APIConfig, progress=lambda text: None,
         return entry.source, entry.context, scope
     for e in project.entries:
         key = identity(e)
-        if not overwrite and e.enabled and e.translation and not validate_entry(project, e, e.translation, terms):
+        if not overwrite and not only_errors and e.enabled and e.translation and not validate_entry(project, e, e.translation, terms):
             if key in memory and memory[key] != e.translation:
                 conflicts.add(key)
             memory[key] = e.translation
@@ -531,7 +590,8 @@ def translate(project: Project, config: APIConfig, progress=lambda text: None,
             "Giữ mọi token __VH...__ đúng một lần, giữ thứ tự thẻ định dạng. "
             "Trong giao diện: Credits=Đội ngũ phát triển; Quit=Thoát; Resolution=Độ phân giải; "
             "Volume=Âm lượng; Lobby=Phòng chờ; Revive=Hồi sinh. Trong nhiệm vụ: Defeat=Đánh bại; "
-            "Fend off=Đẩy lùi; Reach=Đến. Chọn nghĩa theo ngữ cảnh, không áp dụng máy móc cho lời thoại. "
+            "Fend off=Đẩy lùi; Reach=Đến. Level trong tiến trình/nhân vật là cấp/cấp độ, trong màn chơi là màn; không phải Resolution. "
+            "Chọn nghĩa theo ngữ cảnh, không áp dụng máy móc cho lời thoại. "
             'Chỉ trả JSON {"translations":[{"id":"id gốc","text":"bản dịch tiếng Việt"}]}. '
             "Đủ mọi ID, không thiếu/thừa/trùng.\n"
             + project.instructions + "\nNgữ cảnh game: " + project.game_context
@@ -550,37 +610,59 @@ def translate(project: Project, config: APIConfig, progress=lambda text: None,
                 local_rows.append({"id": item["id"], "text": item["text"]})
             else:
                 remote_items.append(item)
-        if remote_items:
-            messages[1]["content"] = json.dumps({"items": remote_items}, ensure_ascii=False)
-            if client is None:
-                client = Client(config)
-                if config.provider == "google-web":
-                    client.google_cache = project.google_web_cache
-                    client.google_reuse_cache = not overwrite
-            result = client.complete(messages, stop)
-            if isinstance(result, dict) and isinstance(result.get("translations"), list):
-                result["translations"] = result["translations"] + local_rows
-        else:
-            result = {"translations": local_rows}
+        if remote_items and client is None:
+            client = Client(config)
+            if config.provider == "google-web":
+                client.google_cache = project.google_web_cache
+                client.google_reuse_cache = not (overwrite or only_errors)
+        batch_error = ""
+        try:
+            if remote_items:
+                messages[1]["content"] = json.dumps({"items": remote_items}, ensure_ascii=False)
+                result = client.complete(messages, stop)
+                received = translation_rows(result, [item["id"] for item in remote_items])
+                received.update({row["id"]: row["text"] for row in local_rows})
+            else:
+                received = {row["id"]: row["text"] for row in local_rows}
+        except ValueError as exc:
+            if config.provider != "ollama":
+                raise
+            received = {row["id"]: row["text"] for row in local_rows}
+            batch_error = str(exc)
+            progress("Ollama trả lô sai; thử riêng từng câu và giữ các kiểm tra tên/biến.")
         batches += 1
-        rows = result.get("translations") if isinstance(result, dict) else None
-        if not isinstance(rows, list) or any(not isinstance(r, dict) or not isinstance(r.get("id"), str) or not isinstance(r.get("text"), str) for r in rows):
-            raise ValueError("API không trả về danh sách translations đúng định dạng.")
-        received = {r["id"]: r["text"] for r in rows}
-        if len(received) != len(rows) or set(received) != set(masks):
-            raise ValueError("API trả thiếu, thừa hoặc trùng ID; lô này chưa được lưu.")
-        for e in batch:
-            try:
-                text = unmask(normalize_translation(received[e.id]), *masks[e.id])
+        for e, item in zip(batch, items):
+            if stop.is_set():
+                break
+            def check(masked):
+                text = unmask(normalize_translation(masked), *masks[e.id])
                 errors = validate_entry(project, e, text, terms)
                 if errors:
                     raise ValueError(" ".join(errors))
+                return text
+            recovered = False
+            try:
+                try:
+                    if e.id not in received:
+                        raise ValueError(batch_error)
+                    text = check(received[e.id])
+                except ValueError:
+                    if config.provider != "ollama":
+                        raise
+                    progress(f"[{done}/{total}] Phục hồi câu lỗi Ollama; thử riêng và bảo vệ token cục bộ…")
+                    text = recover_ollama(client, instruction, item, masks[e.id][0], check, stop)
+                    recovered = True
                 for match in groups[identity(e)]:
                     match.translation, match.error = text, ""
                     done += 1
+                if recovered:
+                    save()
             except ValueError as exc:
                 for match in groups[identity(e)]:
                     match.error = str(exc)
+            except (RuntimeError, InterruptedError):
+                save()
+                raise
         save()
     if config.provider == "google-web" and client and client.google_cache_hits:
         progress(f"Google Dịch: dùng lại {client.google_cache_hits} đoạn từ cache project, không gửi yêu cầu cho các đoạn này.")

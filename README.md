@@ -1,6 +1,6 @@
 # ToolVH
 
-Ứng dụng GUI trên Windows giúp quét text tiếng Anh trong thư mục game, dịch sang tiếng Việt, duyệt bản dịch và cài bản vá có sao lưu. Phiên bản hiện tại: **0.7.5**. Mã nguồn được cấp phép theo [Apache-2.0](LICENSE).
+Ứng dụng GUI trên Windows giúp quét text tiếng Anh trong thư mục game, dịch sang tiếng Việt, duyệt bản dịch và cài bản vá có sao lưu. Phiên bản hiện tại: **0.7.7**. Mã nguồn được cấp phép theo [Apache-2.0](LICENSE).
 
 ToolVH hỗ trợ nhiều định dạng, nhưng **chưa thể Việt hóa mọi game**. Khả năng quét, cài bản dịch và sửa font phụ thuộc cấu trúc dữ liệu của từng game; cần kiểm tra kết quả trong game trước khi chia sẻ bản vá.
 
@@ -21,7 +21,7 @@ ToolVH hỗ trợ nhiều định dạng, nhưng **chưa thể Việt hóa mọi
 | File text | JSON, CSV/TSV, XML, INI, TXT và phụ đề SRT theo cấu trúc bộ đọc hỗ trợ. |
 | Unity | TextAsset, Localization StringTable có type tree và adapter `TranslatedMessageProvider` của Ori and the Will of the Wisps. Hỗ trợ cập nhật Addressables binary catalog v2 và JSON catalog cục bộ trong phạm vi writer hiện có. |
 | Godot | PCK rời v1–v3 không mã hóa; CSV/JSON, gettext PO/MO UTF-8, trường text của TSCN, Translation TRES dạng text và Godot 4 Translation RSRC v5/v6 little-endian một resource. |
-| Unreal Engine | LOCRES rời v0–v3 hoặc LOCRES không nén trong PAK v1–v7 không mã hóa, không có chữ ký. Giữ namespace, key và hash nguồn. |
+| Unreal Engine | LOCRES rời v0–v3; LOCRES không nén trong PAK v1–v7; PAK v10–v12 có full directory index với LOCRES không nén/Zlib/Gzip/Oodle. Không mã hóa/có chữ ký. Giữ namespace, key, hash nguồn và payload khác. |
 | RPG Maker MV/MZ | JSON database trong `data/` khi nhận diện được core engine; tên, mô tả, thuật ngữ và lệnh sự kiện hiển thị thoại/lựa chọn. Không sửa script, plugin command hoặc trường note. |
 | Ren’Py | Source/template RPY: thoại thường/nhiều dòng, thuộc tính nhân vật, `extend`, menu có điều kiện, say arguments và cặp old/new English. Monologue triple quote được tách từng khối, giữ điểm ngắt thoại. Không thực thi Python hoặc sửa logic game. |
 
@@ -29,7 +29,11 @@ ToolVH hỗ trợ nhiều định dạng, nhưng **chưa thể Việt hóa mọi
 
 - Unity thiếu type tree hoặc schema chưa nhận diện; Addressables remote/cache, catalog đóng trong bundle và cấu trúc dependency chưa hỗ trợ có thể bị chặn.
 - Godot PCK mã hóa/sparse/v4 hoặc nhúng trong EXE; RSCC, OptimizedTranslation, scene binary và RSRC ngoài schema đã hỗ trợ. PO/MO chưa hỗ trợ đầy đủ plural; PO fuzzy/obsolete được bỏ qua. File nguồn có `.import`/`.remap` có thể bị bỏ qua vì game đọc tài nguyên đã nhập.
-- Unreal PAK v8+, gói nén/mã hóa/có chữ ký, IoStore (`.utoc`, `.ucas`) và text trong UASSET chưa hỗ trợ cài bản dịch.
+- Unreal PAK v8–v9, index không có tên file, codec Oodle không được decoder hỗ trợ, gói mã hóa/có chữ ký, IoStore (`.utoc`, `.ucas`) và text trong UASSET chưa hỗ trợ cài bản dịch. IoStore được đọc header để báo phiên bản/chunk và file cặp, không quét chuỗi nhị phân thành text giả.
+- Bộ quét bỏ manifest và dữ liệu launcher/achievement trong thư mục `*-GSE`/`steam_settings`; không coi đó là text trong game. Bảng English `en-001` được nhận diện. Nếu PAK có tài nguyên Vietnamese sẵn, báo cáo gợi ý thử chọn Tiếng Việt trong game; chưa xác nhận chất lượng hoặc game có nạp bảng đó.
+- Shady Job: đã đọc được 530 vị trí English trong hai bảng en/en-001 nén Oodle; kiểm tra ghi lại nguồn và tiếng Việt dài hơn vào PAK. Chưa xác nhận game nạp bản vá, font và toàn bộ text trong IoStore. Decoder oozextract MIT chạy trong WebAssembly có giới hạn bộ nhớ/fuel, được đóng gói sẵn; không tải/chạy DLL từ game.
+- Sau quét, nếu không có câu được chọn, tool hiện **Tất cả** ứng viên và thông báo cần xem báo cáo, thay vì bảng trống ở bộ lọc **Đã chọn**. Không tự chọn các ứng viên chưa xác nhận là text game.
+- Để build lại decoder từ nguồn: cài Rust, chạy `rustup target add wasm32-unknown-unknown`, rồi `powershell -ExecutionPolicy Bypass -File scripts/Build-Oodle.ps1`. WASM đã có trong repo, build EXE bình thường không cần Rust. Cargo.lock ghim phụ thuộc và thư mục native/oodle/THIRD-PARTY-LICENSES giữ thông báo bên thứ ba.
 - Ren’Py RPA/RPYC, raw/backtick strings, speaker dạng biểu thức phức tạp, screen UI/Python, triple quote trong old/new và chế độ `rpy monologue none` chưa hỗ trợ. Các khối bị bỏ qua không được coi là đã dịch.
 
 Tên engine được nhận diện không có nghĩa toàn bộ text trong game đã được tìm thấy. Các mục thiếu thông tin locale cần được xác nhận là tiếng Anh trước khi dịch.
@@ -130,6 +134,10 @@ Trong **Cấu hình**, giữ bật **Giữ nguyên tên nhân vật, địa danh
 
 Kiểm tra bản dịch phát hiện lỗi tên, biến và định dạng; không thay thế việc đánh giá nghĩa, giọng thoại hoặc bố cục trong game.
 
+Khi mở project, tool kiểm tra lại bản dịch cũ theo quy tắc hiện tại. Trước xuất/cài, tên đứng riêng được khôi phục theo danh sách giữ tên/glossary; các câu còn vi phạm được đánh dấu đầy đủ và chặn cài, không chỉ báo lỗi đầu tiên.
+
+**Thử lại câu lỗi** trong Cấu hình chỉ dịch mục đang chọn có lỗi, kể cả mục có bản dịch cũ; tạo bản sao project và giữ câu cũ nếu thất bại. Ollama tự thử riêng câu/lô sai. Nếu vẫn mất token, tool có thể dịch tối đa 64 đoạn chữ (16.000 ký tự), chia lô tối đa 5 đoạn/1.500 ký tự và ghép nguyên token/tên tại vị trí gốc cục bộ. Phục hồi này giữ định dạng nhưng cần duyệt nghĩa và độ tự nhiên của câu ghép. Không bỏ kiểm tra, không đổi dịch vụ; lỗi mạng dừng tác vụ. API cloud không tự gọi lại theo cơ chế này để tránh phát sinh thêm chi phí.
+
 ## Kiểm tra và sửa font
 
 Mở **Báo cáo / Cài đặt → Kiểm tra / sửa font… → Quét font**. Chọn font hỗ trợ sửa, chọn TTF/OTF đủ ký tự hoặc để trống để lấy font Windows, rồi **Xuất bản vá font…** hoặc **Tạo và cài font**. Đóng game trước khi cài; giữ backup font riêng. Có thể dùng **Chuẩn hóa Unicode**, quét font lại và cài lại bản dịch khi cần.
@@ -152,6 +160,7 @@ Chạy kiểm thử từ môi trường đã cài phụ thuộc:
 .\.venv\Scripts\python.exe -m scripts.gui_preflight_smoke
 .\.venv\Scripts\python.exe -m scripts.gui_google_cache_smoke
 .\.venv\Scripts\python.exe -m scripts.gui_responses_smoke
+.\.venv\Scripts\python.exe -m scripts.gui_recovery_smoke
 ```
 
 Kiểm thử dùng dữ liệu tổng hợp và mock API; không cần game thương mại hoặc API key. Kiểm thử GUI chạy offscreen; kiểm thử DPAPI cần môi trường Windows.

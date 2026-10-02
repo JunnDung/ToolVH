@@ -1,5 +1,34 @@
 # Thay đổi phiên bản
 
+## 0.7.9
+
+- Giải nén Oodle bằng oozextract 0.5.5 MIT trong WASM/Wasmtime: không host imports, giới hạn 64 MB/block, 256 MB bộ nhớ và fuel; chặn dữ liệu bị cắt/sai kích thước. Đóng gói sẵn decoder, giữ nguồn wrapper/Cargo.lock/license và script build lại.
+- Shady Job: đọc được 530 vị trí English từ LOCRES en/en-001, thử ghi nguồn và tiếng Việt dài hơn vào PAK; giữ payload còn lại. Chưa xác nhận đủ text trong IoStore hay nạp bản vá runtime.
+- Quét không có mục được chọn sẽ hiện Tất cả ứng viên và hướng dẫn xem báo cáo; giữ Đã chọn khi có text xác nhận.
+
+## 0.7.8
+
+- Thêm đọc/ghi LOCRES trong PAK v10–v12 full directory index không mã hóa/có chữ ký; không nén, Zlib và Gzip. Kiểm tra SHA1 từng index/payload; giữ payload khác và cập nhật directory/path-hash locations khi ghi lại.
+- Nhận diện tên file UTF8 PAK v12 và locale en-001; bỏ LOCRES nội bộ Engine trong PAK hiện đại.
+- IoStore: đọc header/chunk, báo file cặp thiếu và giới hạn adapter; không đọc toàn bộ UCAS lớn chỉ để tìm chuỗi nhị phân.
+- Bỏ manifest/dữ liệu launcher GSE/steam_settings khỏi text dịch; báo rõ Oodle chưa giải nén và tài nguyên Vietnamese có sẵn.
+- Kiểm tra index Shady Job thực tế: 4.670 member, 16 LOCRES game, có vi-VN; English nén Oodle nên chưa thể trích xuất/cài ở bản này.
+
+## 0.7.7
+
+- Bắt lỗi Ollama đóng/reset kết nối, báo lỗi có thể tiếp tục từ checkpoint thay vì traceback HTTP.
+- Kiểm tra lại bản dịch cũ khi mở project/thử lại lỗi và trước xuất/cài; báo đầy đủ mục lỗi thay vì chỉ lỗi đầu tiên. Khôi phục tên/thuật ngữ đứng riêng theo quy tắc hiện tại trước cài.
+- Bỏ tự bảo vệ từ chung Forest/Temple từ bảng Locations; kiểm tra tên không báo sai chỉ vì khác chữ hoa/thường.
+- Phục hồi đoạn dài Ollama: tối đa 64 đoạn/16.000 ký tự, lô tối đa 5 đoạn/1.500 ký tự; chia về từng đoạn nếu lô sai JSON/ID. Giữ token cục bộ và không ghi câu chưa hợp lệ.
+
+## 0.7.6
+
+- Ollama: lô sai JSON/ID hoặc câu mất token được thử riêng; phục hồi đoạn chữ có giới hạn khi vẫn mất token, ghép token nguyên gốc cục bộ và kiểm tra lại trước lưu.
+- Thêm Thử lại câu lỗi, chỉ xử lý mục lỗi đang chọn, sao lưu project và giữ bản dịch cũ khi thất bại. Lỗi kết nối vẫn dừng tác vụ.
+- Bảo vệ tên từ bảng Locations/CharacterNames và một số tên đã xác định của Children of Morta.
+- CSV: dùng câu lân cận trong cùng bảng/object/ngôn ngữ, không tách ngữ cảnh theo số dòng.
+- Bổ sung hướng dẫn phân biệt Level theo tiến trình/màn chơi với Resolution; không tự sửa bản dịch cũ hoặc cam kết đúng mọi ngữ cảnh.
+
 ## 0.7.5
 
 - Thêm API Responses và tự nhận diện URL /responses trong preset tương thích OpenAI; chuẩn hóa URL, gửi instructions/input/store:false và đọc output hoàn tất.

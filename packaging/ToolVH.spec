@@ -4,11 +4,14 @@ from PyInstaller.utils.hooks import collect_all
 
 root = Path(SPECPATH).parent
 datas, binaries, hiddenimports = [], [], []
-for package in ('UnityPy', 'texture2ddecoder', 'etcpak', 'astc_encoder', 'archspec'):
+for package in ('UnityPy', 'texture2ddecoder', 'etcpak', 'astc_encoder', 'archspec', 'wasmtime'):
     package_datas, package_binaries, package_imports = collect_all(package)
     datas.extend(package_datas)
     binaries.extend(package_binaries)
     hiddenimports.extend(package_imports)
+
+datas.append((str(root / 'toolvh' / 'data' / 'toolvh_oodle.wasm'), 'toolvh/data'))
+datas.append((str(root / 'native' / 'oodle' / 'THIRD-PARTY-LICENSES'), 'toolvh/oodle-licenses'))
 
 a = Analysis(
     [str(root / 'launcher.py')],

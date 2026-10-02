@@ -1,0 +1,54 @@
+aho-corasick 1.1.5 | Unlicense OR MIT | https://github.com/BurntSushi/aho-corasick
+anstream 1.0.0 | MIT OR Apache-2.0 | https://github.com/rust-cli/anstyle.git
+anstyle 1.0.14 | MIT OR Apache-2.0 | https://github.com/rust-cli/anstyle.git
+anstyle-parse 1.0.0 | MIT OR Apache-2.0 | https://github.com/rust-cli/anstyle.git
+anstyle-query 1.1.5 | MIT OR Apache-2.0 | https://github.com/rust-cli/anstyle.git
+anstyle-wincon 3.0.11 | MIT OR Apache-2.0 | https://github.com/rust-cli/anstyle.git
+bytemuck 1.25.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/Lokathor/bytemuck
+bytes 1.12.1 | MIT | https://github.com/tokio-rs/bytes
+cfg-if 1.0.5 | MIT OR Apache-2.0 | https://github.com/rust-lang/cfg-if
+colorchoice 1.0.5 | MIT OR Apache-2.0 | https://github.com/rust-cli/anstyle.git
+env_filter 2.0.0 | MIT OR Apache-2.0 | https://github.com/rust-cli/env_logger
+env_logger 0.11.11 | MIT OR Apache-2.0 | https://github.com/rust-cli/env_logger
+futures 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs
+futures-channel 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs
+futures-core 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs
+futures-executor 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs
+futures-io 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs
+futures-macro 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs
+futures-sink 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs
+futures-task 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs
+futures-util 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs
+is_terminal_polyfill 1.70.2 | MIT OR Apache-2.0 | https://github.com/polyfill-rs/is_terminal_polyfill
+lazy_static 1.5.1 | MIT OR Apache-2.0 | https://github.com/rust-lang-nursery/lazy-static.rs
+log 0.4.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/log
+matchers 0.2.0 | MIT | https://github.com/hawkw/matchers
+memchr 2.8.3 | Unlicense OR MIT | https://github.com/BurntSushi/memchr
+nu-ansi-term 0.50.3 | MIT | https://github.com/nushell/nu-ansi-term
+once_cell 1.21.4 | MIT OR Apache-2.0 | https://github.com/matklad/once_cell
+once_cell_polyfill 1.70.2 | MIT OR Apache-2.0 | https://github.com/polyfill-rs/once_cell_polyfill
+oozextract 0.5.5 | MIT | https://github.com/lvlvllvlvllvlvl/oozextract
+pin-project-lite 0.2.17 | Apache-2.0 OR MIT | https://github.com/taiki-e/pin-project-lite
+proc-macro2 1.0.107 | MIT OR Apache-2.0 | https://github.com/dtolnay/proc-macro2
+quote 1.0.47 | MIT OR Apache-2.0 | https://github.com/dtolnay/quote
+regex 1.13.1 | MIT OR Apache-2.0 | https://github.com/rust-lang/regex
+regex-automata 0.4.18 | MIT OR Apache-2.0 | https://github.com/rust-lang/regex
+regex-syntax 0.8.11 | MIT OR Apache-2.0 | https://github.com/rust-lang/regex
+safe_arch 0.7.4 | Zlib OR Apache-2.0 OR MIT | https://github.com/Lokathor/safe_arch
+sharded-slab 0.1.7 | MIT | https://github.com/hawkw/sharded-slab
+slab 0.4.12 | MIT | https://github.com/tokio-rs/slab
+syn 2.0.119 | MIT OR Apache-2.0 | https://github.com/dtolnay/syn
+syn 3.0.6 | MIT OR Apache-2.0 | https://github.com/dtolnay/syn
+test-log 0.2.21 | Apache-2.0 OR MIT | https://github.com/d-e-s-o/test-log.git
+test-log-core 0.2.21 | Apache-2.0 OR MIT | https://github.com/d-e-s-o/test-log.git
+test-log-macros 0.2.21 | Apache-2.0 OR MIT | https://github.com/d-e-s-o/test-log.git
+thread_local 1.1.10 | MIT OR Apache-2.0 | https://github.com/Amanieu/thread_local-rs
+tracing 0.1.44 | MIT | https://github.com/tokio-rs/tracing
+tracing-core 0.1.36 | MIT | https://github.com/tokio-rs/tracing
+tracing-log 0.2.0 | MIT | https://github.com/tokio-rs/tracing
+tracing-subscriber 0.3.23 | MIT | https://github.com/tokio-rs/tracing
+unicode-ident 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 | https://github.com/dtolnay/unicode-ident
+utf8parse 0.2.2 | Apache-2.0 OR MIT | https://github.com/alacritty/vte
+wide 0.7.33 | Zlib OR Apache-2.0 OR MIT | https://github.com/Lokathor/wide
+windows-link 0.2.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs
+windows-sys 0.61.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs

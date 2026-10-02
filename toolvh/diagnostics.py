@@ -6,7 +6,7 @@ from .model import Project
 def compatibility_report(project: Project):
     deferred = [f for f in project.files if f.kind == "bundle"]
     skipped = [f for f in project.files if f.kind == "skipped"]
-    unsupported = [f for f in project.files if f.note.startswith("Định dạng chưa hỗ trợ") or "chưa hỗ trợ" in f.note or "cần đọc tài nguyên đích" in f.note]
+    unsupported = [f for f in project.files if f.note.startswith("Định dạng chưa hỗ trợ") or "chưa hỗ trợ" in f.note or "cần đọc tài nguyên đích" in f.note or f.kind in ("utoc", "ucas") or "chưa có bộ giải nén" in f.note]
     errors = [f for f in project.files if f.kind == "error" or f.note.startswith("Không đọc được")]
     partial = [f for f in project.files if "thiếu type tree" in f.note]
     selected = [e for e in project.entries if e.enabled]
@@ -37,7 +37,7 @@ def report_text(project: Project):
     if project.scan_revision < 2:
         lines.append("Project dùng bộ quét cũ. Cần quét lại trước khi dịch/xuất bản vá.")
     if r["bundle_files_not_scanned"]:
-        lines.append(f"Còn {r['bundle_files_not_scanned']} bundle/PCK chưa đọc → bật Quét sâu bundle / PCK.")
+        lines.append(f"Còn {r['bundle_files_not_scanned']} bundle/PCK/PAK chưa đọc → bật Quét sâu bundle / PCK.")
     if r["oversized_files"]:
         lines.append(f"{r['oversized_files']} file vượt giới hạn → tăng giới hạn quét trong Cấu hình.")
     if r["unsupported_files"]:
@@ -46,6 +46,11 @@ def report_text(project: Project):
         lines.append(f"{r['files_with_missing_type_tree']} file có MonoBehaviour thiếu type tree; phần dữ liệu này chưa được trích xuất.")
     if r["read_errors"]:
         lines.append(f"{r['read_errors']} file bị lỗi đọc; xem Nhật ký.")
+    for record in project.files:
+        if record.kind == "pak" and ("chưa có bộ giải nén" in record.note or "Có tài nguyên Vietnamese sẵn" in record.note):
+            lines.append(record.note)
+    if any(record.kind in ("utoc", "ucas") for record in project.files):
+        lines.append("IoStore: chưa đọc/ghi text trong asset; số câu đã dịch không phải tỷ lệ hoàn thành toàn game.")
     lines.append("Khả năng cài: bấm Kiểm tra khả năng cài để thử writer/catalog trước khi dịch; kết quả chỉ áp dụng các câu đã chọn.")
     lines.append("Font và bố cục: cần kiểm tra trong game sau khi cài thử bản vá.")
     return "\n".join(lines)

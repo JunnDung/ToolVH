@@ -78,7 +78,7 @@ class TerminologyTests(unittest.TestCase):
         with patch.object(Client,'complete',side_effect=RuntimeError('offline')):
             with self.assertRaises(RuntimeError):translate(p,APIConfig(provider='ollama',base_url='http://localhost:11434',model='test'),overwrite=True)
         self.assertEqual(p.entries[0].translation,'Bản dịch cũ')
-        with patch.object(Client,'complete',return_value={'translations':[{'id':'e1','text':'Đánh bại con bọ'}]}):
+        with patch.object(Client,'complete',return_value={'translations':[{'id':'foreign','text':'Đánh bại con bọ'}]}):
             self.assertEqual(translate(p,APIConfig(provider='ollama',base_url='http://localhost:11434',model='test'),overwrite=True),0)
         self.assertEqual(p.entries[0].translation,'Bản dịch cũ')
         self.assertTrue(p.entries[0].error)

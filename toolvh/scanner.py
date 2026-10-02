@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import struct
 from pathlib import Path
 
 from .formats import TEXT_EXTENSIONS, decode_text, extract, runtime_metadata
@@ -99,6 +100,10 @@ def scan(root: str | Path, progress=lambda text: None, cancelled=lambda: False,
             if ext in TEXT_EXTENSIONS | RESOURCE_EXTENSIONS and any(Path(str(path) + suffix).exists() for suffix in (".import", ".remap")):
                 project.files.append(FileRecord(rel, "metadata", note="Godot import/remap: file nguồn không được dùng trực tiếp; cần đọc tài nguyên đích."))
                 continue
+            if (any(part.lower().endswith('-gse') or part.lower() == 'steam_settings' for part in Path(rel).parts[:-1])
+                    or path.name.lower() in {'manifest_ufsfiles_win64.txt', 'manifest_nonufsfiles_win64.txt', 'notices.txt'}):
+                project.files.append(FileRecord(rel, "metadata", note="Dữ liệu launcher/achievement/manifest phụ trợ; không phải localization trong game."))
+                continue
             if runtime_metadata(rel):
                 project.files.append(FileRecord(rel, "metadata", note="Cấu hình runtime Unity/Addressables; không phải text game."))
                 continue
@@ -109,6 +114,30 @@ def scan(root: str | Path, progress=lambda text: None, cancelled=lambda: False,
                 if not unity and ext not in TEXT_EXTENSIONS | BINARY_EXTENSIONS | RESOURCE_EXTENSIONS | {".rpy"}:
                     continue
                 size = path.stat().st_size
+                if ext in ('.utoc', '.ucas'):
+                    if ext == '.utoc':
+                        with path.open('rb') as stream:
+                            toc = stream.read(144)
+                        if len(toc) < 144 or toc[:16] != b'-==--==--==--==-':
+                            note = 'IoStore UTOC header không hợp lệ/bị cắt.'
+                        else:
+                            version = toc[16]
+                            header_size, count, blocks = struct.unpack_from('<III', toc, 20)
+                            flags = toc[80]
+                            note = (f'IoStore v{version}: {count:,} chunk, {blocks:,} block; '
+                                    f'{"mã hóa" if flags & 2 else "không mã hóa"}. '
+                                    'Chưa đọc/ghi FText hoặc StringTable trong IoStore; cần adapter package theo phiên bản UE. '
+                                    'Không tính chuỗi nhị phân thành text dịch được.')
+                            if header_size < 144 or header_size > size:
+                                note = 'IoStore UTOC header size không hợp lệ.'
+                        if not path.with_suffix('.ucas').exists():
+                            note += ' Thiếu file UCAS cùng tên.'
+                    else:
+                        note = 'Payload IoStore; xem UTOC cùng tên. Chưa hỗ trợ đọc/ghi text trong asset; không quét chuỗi nhị phân ngẫu nhiên.'
+                        if not path.with_suffix('.utoc').exists():
+                            note += ' Thiếu file UTOC cùng tên.'
+                    project.files.append(FileRecord(rel, ext[1:], size=size, note=note))
+                    continue
                 if size > max_mb * 1024 * 1024:
                     project.files.append(FileRecord(rel, "skipped", size=size, note=f"Vượt giới hạn {max_mb} MB/file."))
                     continue
@@ -176,6 +205,8 @@ def scan(root: str | Path, progress=lambda text: None, cancelled=lambda: False,
         except Exception as exc:
             record.note = f"Không đọc được: {type(exc).__name__}: {exc}"
         project.files.append(record)
+    if "Unreal Engine" in project.engines:
+        project.engines = [engine for engine in project.engines if not engine.startswith("PAK (")]
     project.entries = resolve_table_entries(project.entries, scripts)
     from collections import Counter
     counts = Counter(e.file for e in project.entries)

@@ -20,7 +20,7 @@ from .model import Project
 from .patching import export_csv, export_patch, import_csv, install_patch, apply_project, restore_project
 from .scanner import scan
 from .translation import APIConfig, Client, PROVIDERS, translate, validate, environment_key, normalize_translation
-from .terminology import validate_entry, audit, inferred_names
+from .terminology import validate_entry, audit, inferred_names, repair_protected_names
 from .settings import SettingsStore
 from .diagnostics import report_text, compatibility_report
 
@@ -151,7 +151,8 @@ class MainWindow(QMainWindow):
         self.settings_store = SettingsStore(settings_path)
         self.profiles, self.recent, self.active_provider = {}, [], None
         self.verified_api = None
-        self.setWindowTitle("ToolVH 0.6.3 · Việt hóa game")
+        from . import __version__
+        self.setWindowTitle(f"ToolVH {__version__} · Việt hóa game")
         self.resize(1420, 940)
         self.setMinimumSize(1060, 740)
         base = QWidget()
@@ -186,7 +187,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.game_path, 1)
         row.addWidget(self.button("Chọn game…", self.choose_game))
         self.deep = QCheckBox("Quét sâu bundle / PCK")
-        self.deep.setToolTip("Đọc Unity bundle và Godot PCK. Unreal LOCRES rời được đọc ở cả hai chế độ.")
+        self.deep.setToolTip("Đọc Unity bundle, Godot PCK và Unreal PAK hỗ trợ. LOCRES rời được đọc ở cả hai chế độ; IoStore chỉ báo chẩn đoán.")
         self.deep.setChecked(True)
         self.deep.setToolTip("Đọc cả bundle để tìm các bảng ngôn ngữ nằm trong dữ liệu đóng gói. Có thể mất vài phút.")
         row.addWidget(self.deep)
@@ -339,6 +340,7 @@ class MainWindow(QMainWindow):
         review_layout.addWidget(self.button("Kiểm tra bản dịch", self.audit_translations))
         review_layout.addWidget(self.button("Xóa cache Google Dịch", self.clear_google_cache))
         review_layout.addWidget(self.button("Dịch lại các câu đã chọn", lambda: self.start_translation(overwrite=True)))
+        review_layout.addWidget(self.button("Thử lại câu lỗi", lambda: self.start_translation(only_errors=True)))
         review_layout.addStretch()
         self.max_mb = QSpinBox()
         self.max_mb.setRange(1, 4096)
@@ -590,6 +592,7 @@ class MainWindow(QMainWindow):
 
     def set_project(self, project):
         self.project = project
+        audit(project)
         self.game_path.setText(project.root)
         self.instructions.setPlainText(project.instructions)
         self.preserve_names.setChecked(project.preserve_names)
@@ -598,7 +601,7 @@ class MainWindow(QMainWindow):
         self.glossary.setPlainText("\n".join(f"{k} = {v}" for k, v in project.glossary.items()))
         self.model.set_entries(project.entries)
         self.search.clear()
-        self.state.setCurrentText("Đã chọn")
+        self.state.setCurrentText("Đã chọn" if any(e.enabled for e in project.entries) else "Tất cả")
         self.update_filter()
         self.files.clear()
         all_files = QTreeWidgetItem(["Tất cả dữ liệu", str(len(project.entries))])
@@ -614,6 +617,8 @@ class MainWindow(QMainWindow):
         self.log.setPlainText("Engine: " + ", ".join(project.engines) + "\n\n" + "\n".join(
             f"{f.path} — {f.count} text. {f.note}" for f in project.files if f.count or f.note))
         self.update_metrics()
+        if not any(e.enabled for e in project.entries):
+            self.status.setText("Chưa tìm được text English dùng được; đang hiện tất cả ứng viên để duyệt. Xem Báo cáo / Cài đặt để biết tài nguyên bị chặn.")
 
     def update_metrics(self):
         if self.project:
@@ -757,7 +762,8 @@ class MainWindow(QMainWindow):
         elif provider == "ollama":
             self.api_help.setText("Khởi động Ollama, Tải danh sách model rồi chọn model trên máy. URL: http://localhost:11434. "
                                   "Tool dùng tối đa 5 câu/lô, tắt suy luận, context 8192 và chờ tối thiểu 300 giây khi tải model. "
-                                  "Bật JSON mode để ràng buộc cấu trúc. Dịch thử 10 câu và duyệt chất lượng trước khi dịch cả game.")
+                                  "Bật JSON mode để ràng buộc cấu trúc. Lô/câu sai được thử riêng; nếu mất token, phục hồi từng đoạn chữ tối đa 64 đoạn, chia lô nhỏ. "
+                                  "Câu vẫn sai được giữ lỗi, không bỏ kiểm tra. Dịch thử 10 câu và duyệt chất lượng trước khi dịch cả game.")
         elif provider == "openai-responses":
             self.api_help.setText("Nhập Base URL của API Responses (ví dụ https://api.openai.com/v1), model và key của nhà cung cấp. "
                                   "Có thể dán URL kết thúc bằng /responses; tool tự chuẩn hóa. Tải danh sách model rồi Kiểm tra kết nối. "
@@ -842,7 +848,7 @@ class MainWindow(QMainWindow):
             self.api_status.setText(f"Kết nối và sinh bản dịch thành công • {config.model}\nStart game → {translation}")
         self.run_job(lambda progress: client.test_connection(self.stop), success)
 
-    def start_translation(self, checked=False, limit=None, overwrite=False):
+    def start_translation(self, checked=False, limit=None, overwrite=False, only_errors=False):
         if not self.project:
             return self.error("Hãy quét game hoặc mở project trước.")
         if self.project.scan_revision < 2:
@@ -853,14 +859,19 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.tabs.setCurrentWidget(self.settings_page)
             return self.error(str(exc))
-        if not any(e.enabled and (overwrite or not e.translation) for e in self.project.entries):
-            return QMessageBox.information(self, "Dịch tiếng Việt", "Không còn câu chưa dịch trong các mục đã chọn.")
+        if only_errors:
+            self.sync_settings()
+            audit(self.project)
+            self.model.layoutChanged.emit()
+            self.update_metrics()
+        if not any(e.enabled and (bool(e.error) if only_errors else (overwrite or not e.translation)) for e in self.project.entries):
+            return QMessageBox.information(self, "Dịch tiếng Việt", "Không còn câu lỗi trong các mục đã chọn." if only_errors else "Không còn câu chưa dịch trong các mục đã chọn.")
         if overwrite and QMessageBox.question(self, "Dịch lại", "Dịch lại mọi câu đang được đánh dấu chọn? Tool lưu bản sao project trước khi bắt đầu và giữ câu cũ nếu dịch thất bại.") != QMessageBox.Yes:
             return
         if not self.save_project():
             return
         project, path = self.project, self.project_path
-        if overwrite:
+        if overwrite or only_errors:
             try:
                 from datetime import datetime
                 backup = path.with_name(path.stem + ".before-retranslate-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f") + path.suffix)
@@ -871,7 +882,7 @@ class MainWindow(QMainWindow):
             from .patching import preflight
             progress("Kiểm tra đọc/ghi trước khi gửi text tới dịch vụ dịch…")
             preflight(project, progress, self.stop.is_set)
-            return translate(project, config, progress, self.stop, lambda: project.save(path), limit=limit, overwrite=overwrite)
+            return translate(project, config, progress, self.stop, lambda: project.save(path), limit=limit, overwrite=overwrite, only_errors=only_errors)
         self.run_job(work,
                      lambda count: self.translation_finished(count))
 
@@ -986,11 +997,34 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self.error(str(exc))
 
+    def check_patch_translations(self):
+        try:
+            self.sync_settings()
+            repaired = repair_protected_names(self.project)
+            audit(self.project)
+            self.on_edit()
+            self.model.layoutChanged.emit()
+            failed = sum(e.enabled and bool(e.error) for e in self.project.entries)
+            if repaired:
+                self.log.appendPlainText(f"Đã trả {repaired} mục tên/thuật ngữ về đúng quy tắc; bản dịch lời thoại được giữ.")
+            if failed:
+                self.search.clear()
+                self.state.setCurrentText("Có lỗi")
+                self.tabs.setCurrentIndex(1)
+                self.error(f"Còn {failed} mục đã chọn vi phạm tên/biến hoặc chưa phục hồi. Đã đánh dấu toàn bộ trong bộ lọc Có lỗi. Dùng Cấu hình → Thử lại câu lỗi, rồi cài lại. Tên đứng riêng đã được sửa theo quy tắc; lưu project để giữ thay đổi.")
+                return False
+            return True
+        except Exception as exc:
+            self.error(str(exc))
+            return False
+
     def start_export(self):
         if not self.project:
             return
         if self.project.scan_revision < 2:
             return self.error("Bấm Quét dữ liệu lại trước khi xuất bản vá từ project cũ.")
+        if not self.check_patch_translations():
+            return
         parent = QFileDialog.getExistingDirectory(self, "Chọn nơi chứa bản vá (ngoài thư mục game)")
         if not parent:
             return
@@ -1010,6 +1044,8 @@ class MainWindow(QMainWindow):
                 raise ValueError("Khôi phục bản gốc trước khi cài bản dịch mới.")
         except Exception as exc:
             return self.error(str(exc))
+        if not self.check_patch_translations():
+            return
         translated = sum(e.enabled and bool(e.translation) for e in self.project.entries)
         if not translated:
             return self.error("Chưa có bản dịch được chọn để cài.")

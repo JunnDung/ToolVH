@@ -25,6 +25,10 @@ def entry(reader,version):
 
 
 def read(data):
+    if len(data)>=221 and struct.unpack_from('<I',data,len(data)-204)[0]==MAGIC:
+        from . import pak_modern
+        archive=pak_modern.read(data)
+        return archive['version'],archive['offset'],archive['index'],archive['rows'],archive['footer']
     footer=None
     for version in range(1,8):
         size=44+(1 if version>=4 else 0)+(16 if version>=7 else 0)
@@ -51,6 +55,9 @@ def read(data):
 
 
 def payload(data,row,version,index_offset):
+    if version>=10:
+        from . import pak_modern
+        return pak_modern.payload(data,row,pak_modern.read(data))
     if row['compression'] or row['flags']:raise ValueError('PAK LOCRES nén/mã hóa/delete chưa hỗ trợ.')
     r=Reader(data,row['offset'],index_offset);header=entry(r,version)
     if header['offset']!=0 or any(header[k]!=row[k] for k in ('size','uncompressed','compression','checksum','flags')):
@@ -62,6 +69,9 @@ def payload(data,row,version,index_offset):
 
 
 def extract(data,file,cancelled=lambda:False):
+    if len(data)>=221 and struct.unpack_from('<I',data,len(data)-204)[0]==MAGIC:
+        from . import pak_modern
+        return pak_modern.extract(data,file,cancelled)
     version,offset,index,rows,footer=read(data);entries=[];notes=[]
     for row in rows:
         if cancelled():raise InterruptedError('Đã dừng quét PAK.')
@@ -76,6 +86,9 @@ def extract(data,file,cancelled=lambda:False):
 
 
 def rebuild(data,entries):
+    if len(data)>=221 and struct.unpack_from('<I',data,len(data)-204)[0]==MAGIC:
+        from . import pak_modern
+        return pak_modern.rebuild(data,entries)
     version,offset,index,rows,footer=read(data)
     output=bytearray(data[:len(data)-len(footer)]);index=bytearray(index);groups=defaultdict(list)
     for e in entries:groups[e.locator['member']].append(e)

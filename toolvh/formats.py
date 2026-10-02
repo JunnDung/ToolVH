@@ -44,7 +44,7 @@ def locale_code(label: str) -> str:
     label = label.strip().lower().replace("_", "-")
     if label in LANGUAGES:
         return LANGUAGES[label]
-    if re.fullmatch(r"[a-z]{2}(?:-[a-z]{2,4})?", label) and label.split("-")[0] in LOCALE_CODES:
+    if re.fullmatch(r"[a-z]{2}(?:-[a-z]{2,4}|-[0-9]{3})?", label) and label.split("-")[0] in LOCALE_CODES:
         return label
     match = re.fullmatch(r"english\s*\((en(?:-[a-z]{2})?)\)", label)
     return match[1] if match else ""

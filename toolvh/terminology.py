@@ -27,13 +27,16 @@ def ori_project(project):
 def inferred_names(project):
     # Require an explicit semantic name field; title case alone is not evidence.
     names = set(ORI_NAMES if ori_project(project) else ("Steam", "Discord"))
+    if project.root.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].casefold() == "childrenofmorta":
+        names.update(("Barahut", "Caeldippo Caves", "Lucy", "Kevin", "Margaret", "Bergson"))
+    name_table = re.compile(r"^(?:Locations|CharacterNames) / Dòng \d+ /", re.I)
     name_field = re.compile(r"(?<![A-Za-z])(?:location|area|region|character|npc|item|weapon|ability|shard)[_ /.-]*name(?:[_ /.-]|$)", re.I)
     for e in project.entries:
         speaker = e.locator.get("speaker_name")
         if isinstance(speaker, str) and 1 <= len(speaker.strip()) <= 70 and not re.search(r"[{}<>\n\r]", speaker):
             names.add(speaker.strip())
         text = e.source.strip()
-        if (name_field.search(e.context) and not re.search(r"description|achievement", e.context, re.I) and 1 <= len(text) <= 70
+        if (text.casefold() not in ("forest", "temple") and (name_field.search(e.context) or name_table.search(e.context)) and not re.search(r"description|achievement", e.context, re.I) and 1 <= len(text) <= 70
                 and len(text.split()) <= 8 and not re.search(r"[{}<>\n\r.!?=]", text)
                 and re.search(r"[A-Za-z]", text)):
             names.add(text)
@@ -78,10 +81,29 @@ def validate_entry(project, entry, target, terms=None):
     from .translation import TOKENS
     plain = TOKENS.sub(" ", target)
     for expected, count in requirements(entry.source, terms).items():
-        actual = len(re.findall(r"(?<!\w)" + re.escape(expected) + r"(?!\w)", plain))
+        actual = len(re.findall(r"(?<!\w)" + re.escape(expected) + r"(?!\w)", plain, flags=re.I))
         if actual < count:
             errors.append(f"Tên riêng/thuật ngữ phải giữ: {expected} (cần {count} lần).")
     return errors
+
+
+def repair_protected_names(project):
+    """Restore standalone protected names/glossary entries; never replace prose by guessing."""
+    from .translation import mask, unmask, normalize_translation
+    terms = term_policy(project)
+    repaired = 0
+    for entry in project.entries:
+        if not entry.enabled or not entry.translation:
+            continue
+        masked, prefix, values = mask(entry.source, terms)
+        if re.search(r"\w", re.sub(re.escape(prefix) + r"\d+__", "", masked)):
+            continue
+        target = normalize_translation(unmask(masked, prefix, values))
+        if target != entry.translation and not validate_entry(project, entry, target, terms):
+            entry.translation, entry.error = target, ""
+            repaired += 1
+    return repaired
+
 
 def audit(project):
     terms = term_policy(project)
@@ -100,6 +122,7 @@ def context_map(project):
         if e.file.lower().endswith(".rpy"):
             # Dialogue changes speaker within a scene; keep neighbors in its label.
             scope = re.sub(r" / dòng \d+(?: / đoạn \d+)?$", "", e.context).split(" / ", 1)[0]
+        scope = re.sub(r" / Dòng \d+(?= /)", "", scope, flags=re.I)
         key = (e.file, e.locator.get("object"), e.locator.get("container"), scope)
         groups[key].append(e)
     result = {}
