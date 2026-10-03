@@ -138,28 +138,40 @@ def scan(root: str | Path, progress=lambda text: None, cancelled=lambda: False,
                             note += ' Thiếu file UTOC cùng tên.'
                     project.files.append(FileRecord(rel, ext[1:], size=size, note=note))
                     continue
-                if size > max_mb * 1024 * 1024:
+                packed_player = unity and path.name.lower() == "data.unity3d" and header.startswith(b"UnityFS\0")
+                if size > max_mb * 1024 * 1024 and not packed_player:
                     project.files.append(FileRecord(rel, "skipped", size=size, note=f"Vượt giới hạn {max_mb} MB/file."))
                     continue
                 # Quick scan visits root assets first; bundles are listed for optional deep scan.
                 if not deep and ((unity and header.startswith((b"UnityFS", b"UnityWeb", b"UnityRaw"))) or ext in (".pck", ".pak")):
                     project.files.append(FileRecord(rel, "bundle", size=size, note="Chọn Quét sâu để đọc bundle/PCK."))
                     continue
-                candidates.append((path, rel, size, unity))
+                candidates.append((path, rel, size, unity, packed_player))
             except OSError as exc:
                 project.files.append(FileRecord(rel, "error", note=str(exc)))
     project.engines = sorted(engines) or ["Engine riêng / chưa xác định"]
     # Read script identities before stripped Moon providers.
     candidates.sort(key=lambda item: item[0].name.lower() != "globalgamemanagers.assets")
-    for i, (path, rel, size, unity) in enumerate(candidates, 1):
+    for i, (path, rel, size, unity, packed_player) in enumerate(candidates, 1):
         if cancelled():
             raise InterruptedError("Đã dừng quét.")
         progress(f"[{i}/{len(candidates)}] {rel}")
         record = FileRecord(rel, "unity" if unity else path.suffix.lower()[1:], size=size)
         try:
-            data = path.read_bytes()
-            record.sha256 = digest(data)
-            if unity:
+            data = b"" if packed_player else path.read_bytes()
+            record.sha256 = digest(path if packed_player else data)
+            if packed_player:
+                from .unityfs_stream import extract_file, UnsupportedVersion
+                record.kind = "unityfs"
+                try:
+                    entries, record.note = extract_file(path, rel, cancelled, scripts, progress, max_mb)
+                except UnsupportedVersion:
+                    if size > max_mb * 1024 * 1024:
+                        raise
+                    # Retain the existing bounded-file reader for older Unity versions.
+                    record.kind = "unity"
+                    entries, record.note = extract_unity(path.read_bytes(), rel, cancelled, script_registry=scripts)
+            elif unity:
                 entries, record.note = extract_unity(data, rel, cancelled, script_registry=scripts)
             elif record.kind == "pak":
                 if path.with_suffix(".sig").exists() or Path(str(path) + ".sig").exists():

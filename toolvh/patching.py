@@ -60,10 +60,15 @@ def prepare_changes(project, groups, progress=lambda text: None):
     for relative, entries in groups.items():
         progress(f"Đang đóng gói: {relative}")
         record = records[relative]
-        original = safe_child(root, relative).read_bytes()
+        original = safe_child(root, relative) if record.kind == "unityfs" else safe_child(root, relative).read_bytes()
         if digest(original) != record.sha256:
             raise ValueError(f"File game đã thay đổi kể từ lần quét: {relative}")
-        if record.kind == "unity":
+        if record.kind == "unityfs":
+            if "StreamingAssets" in Path(relative).parts and "aa" in Path(relative).parts:
+                raise ValueError("Packed UnityFS trong Addressables chưa hỗ trợ catalog stream.")
+            from .unityfs_stream import rebuild_file
+            modified = rebuild_file(original, entries)
+        elif record.kind == "unity":
             modified = rebuild_unity(original, entries)
         elif record.kind == "pak":
             path = safe_child(root, relative)
@@ -206,12 +211,15 @@ def install_patch(patch: str | Path, game: str | Path, restore=False):
         raise ValueError("Manifest không hợp lệ.")
     tasks, seen = [], set()
     if not restore:
-        changes = {f["path"]: (safe_child(patch / "backup", f["path"]).read_bytes(),
-                                safe_child(patch / "files", f["path"]).read_bytes())
+        changes = {f["path"]: (safe_child(patch / "backup", f["path"]),
+                                safe_child(patch / "files", f["path"]))
                    for f in manifest["files"]}
         # Recompute required catalogs against the installation, including old patches.
-        for relative, (_, expected_catalog) in catalog_updates(game, changes).items():
-            if relative not in changes or changes[relative][1] != expected_catalog:
+        catalogs = {relative: (original.read_bytes(), modified.read_bytes())
+                    for relative, (original, modified) in changes.items()
+                    if "StreamingAssets" in Path(relative).parts and "aa" in Path(relative).parts}
+        for relative, (_, expected_catalog) in catalog_updates(game, catalogs).items():
+            if relative not in changes or changes[relative][1].read_bytes() != expected_catalog:
                 raise ValueError("Bản vá thiếu/sai catalog CRC. Hãy xuất lại bằng ToolVH mới; không cài để tránh màn hình đen.")
     for file in manifest["files"]:
         target = safe_child(game, file["path"])
@@ -221,25 +229,27 @@ def install_patch(patch: str | Path, game: str | Path, restore=False):
             raise ValueError("Manifest có đường dẫn trùng.")
         seen.add(target)
         # Check all inputs and backups before modifying any game file.
-        original = safe_child(patch / "backup", file["path"]).read_bytes()
-        modified = safe_child(patch / "files", file["path"]).read_bytes()
+        original = safe_child(patch / "backup", file["path"])
+        modified = safe_child(patch / "files", file["path"])
         if digest(original) != file["original_sha256"] or digest(modified) != file["patched_sha256"]:
             raise ValueError(f"Dữ liệu bản vá không còn khớp: {file['path']}")
-        current = target.read_bytes()
+        current = digest(target)
         expected = file["patched_sha256"] if restore else file["original_sha256"]
         desired = file["original_sha256"] if restore else file["patched_sha256"]
-        if digest(current) == desired:
+        if current == desired:
             continue  # Allow safe retry after an interrupted install/restore.
-        if digest(current) != expected:
+        if current != expected:
             raise ValueError(f"File hiện tại khác phiên bản cần {'khôi phục' if restore else 'cài'}: {file['path']}")
-        tasks.append((target, current, original if restore else modified))
+        tasks.append((target, current, original if restore else modified, modified if restore else original, desired))
     applied = []
     try:
-        for target, current, new in tasks:
-            if target.read_bytes() != current:
+        for target, current, new, rollback, desired in tasks:
+            if digest(target) != current:
                 raise ValueError(f"File thay đổi trong lúc cài: {target}")
             atomic_write(target, new)
-            applied.append((target, current))
+            applied.append((target, rollback))
+            if digest(target) != desired:
+                raise ValueError(f"Bản vá thay đổi trong lúc chép: {target}")
     except Exception:
         for target, current in reversed(applied):
             atomic_write(target, current)

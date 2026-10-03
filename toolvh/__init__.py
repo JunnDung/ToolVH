@@ -1,3 +1,3 @@
 """ToolVH: inspect, translate and rebuild game text."""
 
-__version__ = "0.7.9"
+__version__ = "0.8.4"

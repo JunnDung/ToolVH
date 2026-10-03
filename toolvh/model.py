@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -88,19 +89,26 @@ def safe_child(root: Path, relative: str) -> Path:
     return target
 
 
-def atomic_write(path: Path, data: bytes) -> None:
+def atomic_write(path: Path, data: bytes | Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=".toolvh-", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
-            stream.write(data)
+            if isinstance(data, Path):
+                with data.open("rb") as source:
+                    shutil.copyfileobj(source, stream, 8 * 1024 * 1024)
+            else:
+                stream.write(data)
         os.replace(name, path)
     finally:
         if os.path.exists(name):
             os.unlink(name)
 
 
-def digest(data: bytes) -> str:
+def digest(data: bytes | Path) -> str:
+    if isinstance(data, Path):
+        with data.open("rb") as stream:
+            return hashlib.file_digest(stream, "sha256").hexdigest()
     return hashlib.sha256(data).hexdigest()
 
 

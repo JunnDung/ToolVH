@@ -92,7 +92,7 @@ def diagnose(project,progress=lambda _:None,stop=None):
                     dynamic=bool(embedded) and not tree.get('m_CharacterRects')
                     result['fonts'].append(dict(base,name=name,kind='unity-dynamic' if dynamic else 'unity-static',
                         missing=describe_missing(required,coverage),repairable=dynamic and not icon,
-                        note='Font icon: giữ nguyên.' if icon else ('Có thể thay TTF nhúng.' if dynamic else 'Font atlas tĩnh cần adapter riêng.')))
+                        note='Font icon: giữ nguyên.' if icon else ('Thay bằng font hoàn chỉnh; không ghép glyph thử nghiệm.' if dynamic else 'Font atlas tĩnh cần adapter riêng.')))
                 elif obj.type.name=='MonoBehaviour':
                     try:
                         tree=obj.read_typetree()
@@ -154,6 +154,11 @@ def diagnose(project,progress=lambda _:None,stop=None):
                 ids.update(int(v) for v in re.findall(r'(?:<char\s+[^>]*\bid="|\bchar\s+id=)(\d+)',text))
                 if ids:result['fonts'].append(dict(file=relative,name=path.name,kind='bmfont',sha256=digest(data),missing=describe_missing(required,ids),repairable=False,note='BMFont: cần tạo lại atlas và metrics, chưa hỗ trợ ghi.'))
         except Exception as exc:result['notes'].append(f'{relative}: {exc}')
+    if root.name.casefold()=='childrenofmorta':
+        for record in result['fonts']:
+            if record['kind']=='unity-dynamic':
+                record['repairable']=record['name']=='neodgm'
+                record['note']='Font English: dùng Fairfax gốc trong game.' if record['repairable'] else 'Font ngôn ngữ khác hoặc đã hỗ trợ: giữ nguyên.'
     if not result['fonts']:result['notes'].append('Chưa tìm thấy font đọc được; có thể font nằm trong container/atlas riêng.')
     return result
 
@@ -171,14 +176,6 @@ def suggested_font(name):
         path=root/candidate
         if path.exists() and VIETNAMESE<=font_coverage(path):return path
     raise ValueError('Chọn file TTF/OTF có đủ tiếng Việt.')
-
-def _font_name(data):
-    with TTFont(io.BytesIO(data)) as font:
-        names=font['name'].names
-        for rec in names:
-            if rec.nameID==1:
-                return rec.toUnicode()
-    raise ValueError('Font nguồn không có family name.')
 
 def rebuild_font_asset(data,records,root,relative,required,font_path=None,progress=lambda _:None):
     env=load_unity(data);objects={object_key(o):o for o in env.objects};modified=set();details=[]
@@ -199,12 +196,27 @@ def rebuild_font_asset(data,records,root,relative,required,font_path=None,progre
             if obj.type.name!='Font':raise ValueError('Font type đã thay đổi.')
             tree=obj.read_typetree()
             if tree.get('m_CharacterRects') or not tree.get('m_FontData'):raise ValueError('Chỉ hỗ trợ Font dynamic có TTF nhúng.')
-            replacement=chosen.read_bytes();old=bytes(tree['m_FontData']);coverage=font_coverage(replacement)
-            # Replacement must not remove ANY existing code point.
-            missing=(required|font_coverage(old))-coverage
-            if missing:raise ValueError('Font thay thế thiếu ký tự đang dùng: '+''.join(chr(c) for c in sorted(missing))[:150])
-            tree['m_FontData']=list(replacement);tree['m_FontNames']=[_font_name(replacement)];obj.save_typetree(tree);modified.add(key)
-            details.append({'name':record['name'],'mode':'replace-dynamic'})
+            old=bytes(tree['m_FontData'])
+            if required<=font_coverage(old):continue
+            replacement=chosen.read_bytes()
+            family=None
+            morta=Path(root).name.casefold()=='childrenofmorta'
+            if morta:
+                if record['name']!='neodgm':
+                    raise ValueError('Children of Morta: chỉ sửa font English neodgm; không thay font ngoại ngữ.')
+                donor=next((o.read_typetree() for o in objects.values() if o.type.name=='Font' and o.read_typetree().get('m_Name')=='Fairfax'),None)
+                if donor is None:raise ValueError('Không có font Fairfax gốc; cần bản game tương thích.')
+                replacement=bytes(donor['m_FontData']);family=donor['m_FontNames']
+                required={c for c in required if c<0x250 or 0x1E00<=c<=0x1EFF} | VIETNAMESE
+                if not required<=font_coverage(replacement):raise ValueError('Font English gốc thiếu ký tự Latin cần dùng.')
+            elif not (required|font_coverage(old))<=font_coverage(replacement):
+                raise ValueError('Font thay thế thiếu glyph gốc; không ghép font thử nghiệm vì có thể làm mất chữ trong Unity.')
+            tree['m_FontData']=list(replacement)
+            if family is None:
+                with TTFont(io.BytesIO(replacement)) as font:family=[font['name'].getDebugName(1)]
+            tree['m_FontNames']=family
+            obj.save_typetree(tree);modified.add(key)
+            details.append({'name':record['name'],'mode':'replace-original-english' if morta else 'replace-dynamic'})
         elif record['kind']=='tmp-static':
             from .tmp_fonts import extend
             tree=obj.read_typetree()
@@ -280,7 +292,7 @@ def export_font_patch(project,report,selected,destination,font_path=None,progres
     if any(c>65535 or 0xD800<=c<=0xDFFF or c<32 for c in required):raise ValueError('Có ký tự ngoài BMP/điều khiển; cần adapter font riêng.')
     if any(r['kind'] in ('ori-bitmap','tmp-static') for r in selected) and any(unicodedata.combining(chr(c)) for c in required):
         raise ValueError('Bản dịch có dấu kết hợp: bấm Chuẩn hóa Unicode và quét font lại trước.')
-    if font_path and not required<=font_coverage(font_path):raise ValueError('Font nguồn không đủ ký tự cho bản dịch.')
+    if font_path and any(r['kind']!='unity-dynamic' for r in selected) and not required<=font_coverage(font_path):raise ValueError('Font nguồn không đủ ký tự cho bản dịch.')
     changes={};details=[];groups=defaultdict(list)
     for record in selected:groups[record['file']].append(record)
     for relative,records in groups.items():

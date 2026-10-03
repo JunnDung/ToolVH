@@ -10,6 +10,8 @@ for package in ('UnityPy', 'texture2ddecoder', 'etcpak', 'astc_encoder', 'archsp
     binaries.extend(package_binaries)
     hiddenimports.extend(package_imports)
 
+datas.append((str(root / 'toolvh' / 'assets'), 'toolvh/assets'))
+
 datas.append((str(root / 'toolvh' / 'data' / 'toolvh_oodle.wasm'), 'toolvh/data'))
 datas.append((str(root / 'native' / 'oodle' / 'THIRD-PARTY-LICENSES'), 'toolvh/oodle-licenses'))
 
@@ -39,7 +41,7 @@ exe = EXE(
     debug=False, bootloader_ignore_signals=False, strip=False, upx=True,
     console=False, disable_windowed_traceback=False,
     argv_emulation=False, target_arch=None, codesign_identity=None,
-    entitlements_file=None,
+    entitlements_file=None, icon=str(root / "packaging" / "ToolVH.ico"),
 )
 coll = COLLECT(
     exe, a.binaries, a.datas, strip=False, upx=True, upx_exclude=[], name='ToolVH',

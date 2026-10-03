@@ -106,8 +106,10 @@ def resolve_table_entries(entries, registry):
     return result
 
 
-def extract_unity(data: bytes, file: str, cancelled=lambda: False, script_registry=None):
+def extract_unity(data: bytes, file: str, cancelled=lambda: False, script_registry=None, container_name=None):
     env = load_unity(data)
+    if container_name is not None:
+        env.file.name = container_name
     registry = script_registry if script_registry is not None else {}
     collect_scripts(env, file, registry)
     entries, notes = [], []

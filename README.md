@@ -1,8 +1,20 @@
 # ToolVH
 
-Ứng dụng GUI trên Windows giúp quét text tiếng Anh trong thư mục game, dịch sang tiếng Việt, duyệt bản dịch và cài bản vá có sao lưu. Phiên bản hiện tại: **0.7.7**. Mã nguồn được cấp phép theo [Apache-2.0](LICENSE).
+<img src="toolvh/assets/toolvh.svg" width="80" alt="ToolVH logo">
+
+
+Ứng dụng GUI trên Windows giúp quét text tiếng Anh trong thư mục game, dịch sang tiếng Việt, duyệt bản dịch và cài bản vá có sao lưu. Phiên bản hiện tại: **0.8.4**. Mã nguồn được cấp phép theo [Apache-2.0](LICENSE).
 
 ToolVH hỗ trợ nhiều định dạng, nhưng **chưa thể Việt hóa mọi game**. Khả năng quét, cài bản dịch và sửa font phụ thuộc cấu trúc dữ liệu của từng game; cần kiểm tra kết quả trong game trước khi chia sẻ bản vá.
+
+## Unity đóng gói (PEAK và cấu trúc tương tự)
+
+- Đọc `*_Data/data.unity3d` UnityFS v7/v8 của Unity 2022+ không mã hóa, dùng block không nén/LZ4/LZ4HC. Đọc từng asset thay vì giải nén toàn bộ bundle lớn vào RAM; giới hạn MB áp dụng cho từng asset. Bật **Quét sâu bundle / PCK** rồi quét lại project cũ.
+- Nhận diện bảng CSV English và JSON dạng vector có `CURRENT_LANGUAGE` xác nhận vị trí tiếng Anh; giữ nguyên khóa, nhãn ngôn ngữ và bản dịch ngôn ngữ khác.
+- Khi xuất/cài, sao chép block gốc và chỉ thêm asset chứa text đã sửa; kiểm tra đọc lại. Bản vá có thể lớn hơn file gốc và cần đủ dung lượng cho bản vá, backup và file tạm.
+- Text trong MonoBehaviour bị bỏ type tree, mã chương trình, bundle mã hóa hoặc font thiếu glyph vẫn cần adapter/sửa riêng. Quét được text không bảo đảm mọi màn hình đã được Việt hóa.
+
+Xuất để chép hoạt động khi đã cài text/font bằng backup được kiểm tra; không thay đổi game thật. Bản dịch lỗi được giữ tiếng Anh và liệt kê trong gói. Gói text không kèm font. Font dynamic dùng font hoàn chỉnh, không ghép glyph thử nghiệm; Children of Morta có adapter font English dùng Fairfax gốc.
 
 ## Tính năng chính
 
@@ -175,3 +187,13 @@ Build bản Windows sau khi tạo `.venv`:
 Script đọc phiên bản từ `toolvh/__init__.py`, tạo thư mục chạy tại `dist/<phiên bản>/ToolVH`, ZIP và file SHA-256. Giữ toàn bộ thư mục chạy cùng `_internal`. Dùng `-NoArchive` nếu chỉ cần thư mục chạy. Không commit `.venv`, `build` hoặc `dist`.
 
 Xem [CHANGELOG](CHANGELOG.md) để biết thay đổi, [ROADMAP](ROADMAP.md) cho lộ trình, [CONTRIBUTING](CONTRIBUTING.md) để đóng góp và [THIRD_PARTY](THIRD_PARTY.md) cho thông tin phụ thuộc. Không đưa asset, text trích xuất hoặc bản vá game thương mại vào repo.
+
+
+### Giao diện và xử lý lỗi
+
+Bắt đầu ở tab **Bắt đầu**: chọn thư mục chứa file chạy game, quét dữ liệu, chọn dịch vụ dịch và dịch thử 10 câu. Nút dịch/xuất chỉ bật khi có dữ liệu phù hợp. Nếu bảng trống do bộ lọc, bấm **Hiện tất cả câu**. **Xuất để chép** tạo bản vá bên ngoài game; **Cài vào game** thay file game và lưu backup.
+
+Khi tác vụ đang chạy, bấm **Dừng tác vụ** rồi chờ thao tác hiện tại kết thúc trước khi đóng ứng dụng. Tải model local có thể mất vài phút. Lỗi thông thường không đóng ứng dụng; xem **Kiểm tra / Khôi phục → Mở nhật ký lỗi** để lấy `errors.log` hoặc `native-crash.log`. Nhật ký giúp điều tra crash còn lại, không đảm bảo khắc phục mọi lỗi driver, thư viện native hoặc thiếu bộ nhớ.
+
+
+Logo gốc của dự án nằm ở `toolvh/assets/toolvh.svg` (vector), `toolvh/assets/toolvh.png` và `packaging/ToolVH.ico`. Các tài nguyên này được phát hành cùng giấy phép Apache-2.0 của dự án.

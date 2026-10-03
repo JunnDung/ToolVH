@@ -1,5 +1,37 @@
 # Thay đổi phiên bản
 
+## 0.8.4
+
+- Giao diện tím/xanh ngọc, logo vector và icon Windows nhiều kích thước; tài nguyên thương hiệu được đóng gói trong EXE.
+- Giải phóng kết quả và closure của tác vụ đã xong, tránh giữ project cũ trong bộ nhớ khi đổi game.
+- Hiển thị tài nguyên cần kiểm tra sau khi quét và liên kết báo cáo hỗ trợ để tránh hiểu nhầm đã trích xuất toàn bộ game.
+- Bảo vệ index bảng không còn hợp lệ; nhận cả enum và số nguyên khi chọn/bỏ chọn câu dịch.
+- Sửa crash native Qt tái hiện khi chọn/bỏ chọn rồi kết thúc tác vụ: cập nhật dataChanged thay vì phát layoutChanged sai vòng đời, giữ worker đến khi thread giải phóng xong. Thêm kiểm thử chạy GUI trong process riêng.
+- Thêm microsecond vào tên bản xuất để tránh trùng thư mục khi xuất liên tiếp.
+
+## 0.8.3
+
+- Chỉ cập nhật kết quả tác vụ và mở hộp thoại sau khi thread nền kết thúc; chặn đóng ứng dụng khi đang xử lý.
+- Giao diện có hướng dẫn thao tác, giải thích nút, trạng thái lọc và liên kết hiện tất cả câu; khóa nút chưa đủ dữ liệu.
+- Trì hoãn lọc khi gõ tìm kiếm để giảm khựng với project lớn; bảo vệ chọn dòng khi bảng thay đổi.
+- Ghi lỗi Python và chẩn đoán crash native trong thư mục logs cạnh cấu hình người dùng.
+
+## 0.8.2
+
+- Xuất để chép dùng bản gốc trong backup khi game đã cài text/font, không khôi phục hay sửa game thật. Bản dịch lỗi được báo riêng, giữ nguồn tiếng Anh. Bản xuất text không kèm font đang cài.
+- Dừng ghép glyph dynamic thử nghiệm do lỗi nạp Unity runtime dù preview đọc được. Children of Morta chỉ thay font English neodgm bằng Fairfax hoàn chỉnh có sẵn trong game; giữ các font khác.
+
+## 0.8.1
+
+- Sửa font Unity dynamic: bổ sung glyph TrueType còn thiếu thay vì thay toàn bộ font và yêu cầu font nguồn chứa tất cả ngôn ngữ gốc. Giữ cmap, glyph cũ, family và metrics dòng; bỏ hinting glyph mới để không dùng nhầm CVT của font gốc.
+- Children of Morta: ưu tiên donor có sẵn trong game để bổ sung tiếng Việt vào font pixel, bỏ qua font đã đủ glyph.
+
+## 0.8.0
+
+- Sửa bỏ qua packed player `data.unity3d` lớn hơn giới hạn file: đọc UnityFS theo asset, không nạp toàn bộ resource vào RAM.
+- Nhận diện tiếng Anh trong JSON vector `CURRENT_LANGUAGE`, không sửa locale/khóa/ngôn ngữ khác.
+- Xuất/cài bundle lớn qua file tạm và hash/copy theo stream; giữ block resource gốc, kiểm tra asset sau ghi và rollback khi cài thất bại.
+
 ## 0.7.9
 
 - Giải nén Oodle bằng oozextract 0.5.5 MIT trong WASM/Wasmtime: không host imports, giới hạn 64 MB/block, 256 MB bộ nhớ và fuel; chặn dữ liệu bị cắt/sai kích thước. Đóng gói sẵn decoder, giữ nguồn wrapper/Cargo.lock/license và script build lại.

@@ -5,6 +5,7 @@ import json
 import tempfile
 from pathlib import Path
 from PySide6.QtCore import QThread, QTimer, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from toolvh.gui import MainWindow, configure_app
 from toolvh.scanner import scan
@@ -20,6 +21,7 @@ with tempfile.TemporaryDirectory() as directory:
     window = MainWindow(str(saved), settings_path=root / 'settings.json')
     window.show()
     window.search.setText('StartScreen')
+    QTest.qWait(250)
     app.processEvents()
     assert window.proxy.rowCount() == 12
     window.table.selectRow(0)

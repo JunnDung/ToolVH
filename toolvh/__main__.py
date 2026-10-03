@@ -78,7 +78,8 @@ def main():
                     print(import_csv(project, args.path), "entries imported")
                     project.save(args.project)
                 elif args.command == "patch":
-                    print(export_patch(project, args.path, print))
+                    from .export_installed import export_copy
+                    print(export_copy(project, args.path, print))
         return 0
     except Exception as exc:
         parser.exit(1, f"ToolVH: {exc}\n")

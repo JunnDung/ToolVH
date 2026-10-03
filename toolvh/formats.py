@@ -35,7 +35,7 @@ RUNTIME_JSON = {"runtimeinitializeonloads.json", "scriptingassemblies.json",
 def runtime_metadata(file: str) -> bool:
     path = "/" + file.replace("\\", "/").lower().lstrip("/")
     return ("/generatedsoundbanks/" in path or path.rsplit("/", 1)[-1] in RUNTIME_JSON | {"performancetestruninfo", "performancetestruninfo.json",
-            "linebreaking leading characters", "linebreaking following characters", "thirdpartynotices.txt", "third-party-notices.txt", "runtimebuildinformation", "runtimebuildinformation.json", "namedatabase"}
+            "linebreaking leading characters", "linebreaking following characters", "thirdpartynotices.txt", "third-party-notices.txt", "steamworks.net.txt", "version.txt", "runtimebuildinformation", "runtimebuildinformation.json", "namedatabase"}
             or "fpstestoutput" in path.rsplit("/", 1)[-1]
             or path.endswith(("/aa/settings.json", "/aa/catalog.json", "/addressableslink/link.xml")))
 
@@ -208,6 +208,23 @@ def extract(text: str, kind: str, file: str, context: str = "") -> list[Entry]:
 
     if kind == "json":
         data = load_json(text)
+        # Serialized language vectors explicitly label each slot; never guess slot 0.
+        labels = data.get("CURRENT_LANGUAGE") if isinstance(data, dict) else None
+        if (isinstance(labels, list) and
+                sum(bool(v.strip()) for v in labels if isinstance(v, str)) >= 2 and
+                all(isinstance(v, list) and len(v) == len(labels) for v in data.values())):
+            english = [i for i, label in enumerate(labels)
+                       if isinstance(label, str) and english_locale(locale_code(label))]
+            for key, values in data.items():
+                if key == "CURRENT_LANGUAGE":
+                    continue
+                for index in english:
+                    value = values[index]
+                    if isinstance(value, str) and value.strip():
+                        add(value, {"path": [key, index]}, f"{key} / {labels[index]}",
+                            "text", locale=locale_code(labels[index]),
+                            evidence="JSON CURRENT_LANGUAGE xác nhận cột tiếng Anh")
+            return entries
         for path, value in walk_strings(data):
             key = str(path[-1]) if path else ""
             if any(str(part).lower() in TECHNICAL_KEYS for part in path):
