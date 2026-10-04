@@ -94,9 +94,18 @@ def scan(root: str | Path, progress=lambda text: None, cancelled=lambda: False,
                 engines.add("Godot")
             if ext in (".godot", ".uproject"):
                 continue
-            if ext not in TEXT_EXTENSIONS | UNITY_EXTENSIONS | BINARY_EXTENSIONS | RESOURCE_EXTENSIONS | {".rpy"} and ext != "":
+            if ext not in TEXT_EXTENSIONS | UNITY_EXTENSIONS | BINARY_EXTENSIONS | RESOURCE_EXTENSIONS | {".rpy", ".xnb", ".vpk", ".loc2"} and filename.lower() != "scripts.zip" and ext != "":
                 continue
             rel = path.relative_to(root).as_posix()
+            if ext in (".xnb", ".vpk", ".loc2") or filename.lower() == "scripts.zip":
+                notes = {
+                    ".xnb": "Tài nguyên XNB: có thể chứa text, ảnh hoặc âm thanh. Cần adapter theo ContentTypeReader; chưa đọc/ghi text. Kiểm tra Content/Strings và Characters/Dialogue nếu game dùng cấu trúc này.",
+                    ".vpk": "Container VPK: cần bộ đọc directory và các chunk cùng bộ. Text thường cần tìm trong resource/ và bảng ngôn ngữ; chưa đọc/ghi VPK.",
+                    ".loc2": "Bảng ngôn ngữ LOC2 biên dịch; chưa đọc/ghi. Nếu có *.string_table.xml, cần bộ biên dịch của game để đưa XML đã sửa vào runtime.",
+                    ".zip": "scripts.zip có thể chứa script và bảng ngôn ngữ. Chưa hỗ trợ dịch Lua/đóng lại gói script; không coi chuỗi code là lời thoại."
+                }
+                project.files.append(FileRecord(rel, ext[1:], size=path.stat().st_size, note=notes[ext]))
+                continue
             if ext in TEXT_EXTENSIONS | RESOURCE_EXTENSIONS and any(Path(str(path) + suffix).exists() for suffix in (".import", ".remap")):
                 project.files.append(FileRecord(rel, "metadata", note="Godot import/remap: file nguồn không được dùng trực tiếp; cần đọc tài nguyên đích."))
                 continue

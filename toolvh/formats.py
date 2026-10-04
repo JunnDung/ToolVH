@@ -17,6 +17,7 @@ TECHNICAL_KEYS = {"id", "key", "guid", "uuid", "path", "file", "filename", "asse
 TECHNICAL_KEYS |= {"assemblyname", "m_assemblyname", "classname", "m_classname", "namespace",
                    "m_namespace", "publickeytoken", "m_key", "m_keyid", "m_code",
                    "m_internalid", "m_providerid", "m_assemblytypename", "m_methodname"}
+TECHNICAL_KEYS |= {"speaker", "speakername", "speaker_name", "characterid", "sceneid", "scene_id"}
 TEXT_KEYS = {"text", "description", "dialogue", "dialog", "message", "title", "label", "name",
              "caption", "subtitle", "english", "en", "en-us", "value", "content", "translation", "m_text"}
 LOCALIZATION = re.compile(r"locali[sz]|language|dialog|subtitle|strings|translation|\blang\b", re.I)
@@ -242,7 +243,20 @@ def extract(text: str, kind: str, file: str, context: str = "") -> list[Entry]:
                         if part.lower() in LANGUAGES or sum(bool(locale_code(str(k))) for k in node) >= 2 or part.lower().startswith("en"):
                             locale = locale_code(part)
                 node = node[part]
-            add(value, {"path": path}, "/".join(map(str, path)), key, locale=locale,
+            locator = {"path": path}
+            parent = get_at(data, path[:-1]) if path else None
+            if isinstance(parent, dict):
+                for field in ("speaker_name", "speakerName", "speaker"):
+                    speaker = parent.get(field)
+                    if isinstance(speaker, str) and 1 <= len(speaker.strip()) <= 70 and not re.search(r"[{}<>\r\n]", speaker):
+                        locator["speaker_name"] = speaker.strip()
+                        break
+                for field in ("scene_id", "sceneId"):
+                    scene = parent.get(field)
+                    if isinstance(scene, (str, int)) and not isinstance(scene, bool):
+                        locator["scene_id"] = str(scene)[:120]
+                        break
+            add(value, locator, "/".join(map(str, path)), key, locale=locale,
                 evidence=f"Ngôn ngữ trong JSON: {locale}" if locale else "")
     elif kind in ("csv", "tsv", "tsv-raw"):
         rows = [line.rstrip("\r\n").split("\t") for line in text.splitlines(keepends=True)] if kind == "tsv-raw" else csv_data(text, kind)[0]
@@ -265,14 +279,33 @@ def extract(text: str, kind: str, file: str, context: str = "") -> list[Entry]:
                 add(value, {"row": r, "col": c}, f"Dòng {r+1} / {key or c+1}" + (f" / {row[0]}" if c else ""), key,
                     locale=locale_code(key) if english else "", evidence=f"Cột nguồn: {key}" if english else "")
     elif kind == "xml":
-        for i, node in enumerate(xml_tree(text).iter()):
+        nodes = list(xml_tree(text).iter())
+        indexes = {id(node): i for i, node in enumerate(nodes)}
+        def visit(node, inherited=""):
             if not isinstance(node.tag, str):
-                continue
+                return
+            tag = node.tag.split("}")[-1].lower()
+            locale = inherited
+            for attr in ("{http://www.w3.org/XML/1998/namespace}lang", "locale", "language", "lang"):
+                if attr in node.attrib:
+                    raw = node.attrib[attr]
+                    locale = locale_code(raw) or raw.strip().lower().replace("_", "-")
+                    break
+            if tag in ("language", "locale"):
+                raw = node.attrib.get("id", node.attrib.get("name", ""))
+                if raw:
+                    locale = locale_code(raw) or raw.strip().lower().replace("_", "-")
+            i = indexes[id(node)]
             if node.text and node.text.strip():
-                add(node.text, {"node": i, "field": "text"}, f"{node.tag}[{i}]", node.tag.split("}")[-1])
+                add(node.text, {"node": i, "field": "text"}, f"{node.tag}[{i}]", tag,
+                    locale=locale, evidence=f"Ngôn ngữ trong XML: {locale}" if locale else "")
             for key, value in node.attrib.items():
-                if key.lower() in TEXT_KEYS:
-                    add(value, {"node": i, "field": key}, f"{node.tag}[{i}] @{key}", key)
+                if key.lower() in TEXT_KEYS and not (tag in ("language", "locale") and key == "name"):
+                    add(value, {"node": i, "field": key}, f"{node.tag}[{i}] @{key}", key,
+                        locale=locale, evidence=f"Ngôn ngữ trong XML: {locale}" if locale else "")
+            for child in node:
+                visit(child, locale)
+        visit(nodes[0])
     elif kind in ("ini", "lang"):
         for i, line in enumerate(text.splitlines(keepends=True)):
             if line.lstrip().startswith(("#", ";", "[")):

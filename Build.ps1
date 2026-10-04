@@ -20,6 +20,9 @@ $packageDirectory = Join-Path $OutputDirectory 'ToolVH'
 foreach ($document in @('LICENSE', 'README.md', 'CHANGELOG.md', 'ROADMAP.md', 'THIRD_PARTY.md')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $document) -Destination $packageDirectory -Force
 }
+$docsDirectory = Join-Path $packageDirectory 'docs'
+New-Item -ItemType Directory -Path $docsDirectory -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs\GAME_LOCALIZATION.md') -Destination $docsDirectory -Force
 # Include the dependency licenses shipped by the installed wheels.
 $sitePackages = & $PythonExecutable -c "import sysconfig; print(sysconfig.get_path('purelib'))"
 if ($LASTEXITCODE -ne 0) { throw 'Cannot locate dependency licenses' }

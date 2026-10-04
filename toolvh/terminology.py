@@ -32,7 +32,7 @@ def inferred_names(project):
     name_table = re.compile(r"^(?:Locations|CharacterNames) / Dòng \d+ /", re.I)
     name_field = re.compile(r"(?<![A-Za-z])(?:location|area|region|character|npc|item|weapon|ability|shard)[_ /.-]*name(?:[_ /.-]|$)", re.I)
     for e in project.entries:
-        speaker = e.locator.get("speaker_name")
+        speaker = e.locator.get("inner", e.locator).get("speaker_name")
         if isinstance(speaker, str) and 1 <= len(speaker.strip()) <= 70 and not re.search(r"[{}<>\n\r]", speaker):
             names.add(speaker.strip())
         text = e.source.strip()
@@ -123,11 +123,24 @@ def context_map(project):
             # Dialogue changes speaker within a scene; keep neighbors in its label.
             scope = re.sub(r" / dòng \d+(?: / đoạn \d+)?$", "", e.context).split(" / ", 1)[0]
         scope = re.sub(r" / Dòng \d+(?= /)", "", scope, flags=re.I)
-        key = (e.file, e.locator.get("object"), e.locator.get("container"), scope)
+        locator = e.locator.get("inner", e.locator)
+        path = locator.get("path", [])
+        # JSON record arrays: adjacent records share a text field, never another scene/locale.
+        if (e.file.lower().endswith(".json") or e.locator.get("format") == "json") and path and isinstance(path[-1], str):
+            indexes = [i for i, part in enumerate(path[:-1]) if isinstance(part, int)]
+            if indexes:
+                index = indexes[-1]
+                scope = (tuple(path[:index]), tuple(path[index+1:]), locator.get("scene_id", ""))
+        key = (e.file, e.locator.get("object"), e.locator.get("container"), e.source_locale, scope)
         groups[key].append(e)
     result = {}
     for group in groups.values():
         for i, e in enumerate(group):
             adjacent = [x.source[:240] for x in group[max(0, i-1):i+2] if x is not e]
-            result[e.id] = {"previous_or_next": adjacent, "note": "Nearby strings are context only, not text to translate."}
+            locator = e.locator.get("inner", e.locator)
+            result[e.id] = {"previous_or_next": adjacent,
+                            "previous": group[i-1].source[:240] if i else "",
+                            "next": group[i+1].source[:240] if i+1 < len(group) else "",
+                            "speaker": locator.get("speaker_name", ""),
+                            "note": "Nearby strings and speaker are context only, not text to translate."}
     return result

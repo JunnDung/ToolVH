@@ -3,7 +3,7 @@
 <img src="toolvh/assets/toolvh.svg" width="80" alt="ToolVH logo">
 
 
-Ứng dụng GUI trên Windows giúp quét text tiếng Anh trong thư mục game, dịch sang tiếng Việt, duyệt bản dịch và cài bản vá có sao lưu. Phiên bản hiện tại: **0.8.4**. Mã nguồn được cấp phép theo [Apache-2.0](LICENSE).
+Ứng dụng GUI trên Windows giúp quét text tiếng Anh trong thư mục game, dịch sang tiếng Việt, duyệt bản dịch và cài bản vá có sao lưu. Phiên bản hiện tại: **0.8.5**. Mã nguồn được cấp phép theo [Apache-2.0](LICENSE).
 
 ToolVH hỗ trợ nhiều định dạng, nhưng **chưa thể Việt hóa mọi game**. Khả năng quét, cài bản dịch và sửa font phụ thuộc cấu trúc dữ liệu của từng game; cần kiểm tra kết quả trong game trước khi chia sẻ bản vá.
 
@@ -197,3 +197,5 @@ Khi tác vụ đang chạy, bấm **Dừng tác vụ** rồi chờ thao tác hi�
 
 
 Logo gốc của dự án nằm ở `toolvh/assets/toolvh.svg` (vector), `toolvh/assets/toolvh.png` và `packaging/ToolVH.ico`. Các tài nguyên này được phát hành cùng giấy phép Apache-2.0 của dự án.
+
+Xem [Tìm text game và dịch đúng ngữ cảnh](docs/GAME_LOCALIZATION.md) để tra vị trí tài nguyên, giới hạn adapter và hướng dẫn giữ lời chửi tục theo nguồn.

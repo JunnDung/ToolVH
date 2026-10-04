@@ -382,6 +382,7 @@ class MainWindow(QMainWindow):
         self.json_mode.setChecked(True)
         self.instructions = QPlainTextEdit("Dịch tự nhiên, ngắn gọn, phù hợp giao diện và hội thoại game.")
         self.instructions.setMaximumHeight(100)
+        self.instructions.setToolTip("Giữ mức độ lời chửi như nguồn. Có thể chỉ định giọng Bắc/Nam, cách xưng hô và thuật ngữ. Google Dịch web không nhận chỉ dẫn này.")
         self.glossary = QPlainTextEdit()
         self.glossary.setPlaceholderText("Mỗi dòng: thuật ngữ = bản dịch\nChef = Đầu bếp\nOnion King = Vua Hành Tây")
         self.glossary.setMaximumHeight(180)

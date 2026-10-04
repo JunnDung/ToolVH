@@ -1,5 +1,13 @@
 # Thay đổi phiên bản
 
+## 0.8.5
+
+- XML: xác nhận locale theo thuộc tính và thẻ language/locale kế thừa; chỉ lấy nhánh English, giữ nhánh ngôn ngữ khác khi ghi lại.
+- JSON: loại speaker/scene ID khỏi text dịch, dùng người nói làm tên bảo vệ; nối câu trước/sau trong cùng mảng, trường, scene, locale và asset.
+- Prompt dịch giữ giọng nhân vật, tiếng lóng và mức độ chửi tục nguồn; phân biệt lời chửi/cảm thán/từ nhấn mạnh/nghĩa tình dục, không thêm tục vào câu trung tính.
+- Báo rõ Google Dịch web không nhận chỉ dẫn văn phong/ngữ cảnh.
+- Báo tài nguyên XNB/VPK/LOC2/scripts.zip chưa có adapter thay vì bỏ qua; thêm hướng dẫn vị trí text qua kiểm tra cấu trúc 8 game. Chưa triển khai writer cho các container này.
+
 ## 0.8.4
 
 - Giao diện tím/xanh ngọc, logo vector và icon Windows nhiều kích thước; tài nguyên thương hiệu được đóng gói trong EXE.

@@ -527,6 +527,7 @@ def translate(project: Project, config: APIConfig, progress=lambda text: None,
     neighbors = context_map(project)
     client = None
     if config.provider == "google-web":
+        progress("Google Dịch web không nhận chỉ dẫn văn phong/ngữ cảnh; kiểm tra lại xưng hô, tiếng lóng và lời chửi sau dịch.")
         from dataclasses import replace
         config = replace(config, batch_size=1)  # Persist every sentence if the web service stops.
     elif config.provider == "ollama":
@@ -592,6 +593,14 @@ def translate(project: Project, config: APIConfig, progress=lambda text: None,
             "Volume=Âm lượng; Lobby=Phòng chờ; Revive=Hồi sinh. Trong nhiệm vụ: Defeat=Đánh bại; "
             "Fend off=Đẩy lùi; Reach=Đến. Level trong tiến trình/nhân vật là cấp/cấp độ, trong màn chơi là màn; không phải Resolution. "
             "Chọn nghĩa theo ngữ cảnh, không áp dụng máy móc cho lời thoại. "
+            "Lời thoại phải đúng giọng nhân vật, quan hệ và cảm xúc; dùng previous/next và speaker "
+            "để chọn xưng hô nhất quán. Không tự bịa quan hệ, giới tính hay chi tiết cốt truyện chưa có bằng chứng. "
+            "Giữ tiếng lóng, mỉa mai, hài hước và cường độ lời chửi của nguồn; không kiểm duyệt thành dấu *** "
+            "hay làm nhẹ câu chửi tục. Với câu chửi mạnh có thể dùng địt mẹ/đụ má khi đúng ngữ cảnh và vùng giọng "
+            "người dùng yêu cầu; không gán mọi từ fuck thành câu chửi mẹ. Ví dụ: Fuck off! → Cút mẹ đi!; "
+            "It's fucking cold. → Lạnh vãi.; Fuck! (bực tức) → Địt mẹ! hoặc Đụ má! theo giọng nhân vật. "
+            "Không thêm chửi tục vào câu trung tính, không tăng mức độ câu chửi nhẹ. Fuck theo nghĩa hành vi tình dục "
+            "phải dịch theo nghĩa đó. Giữ cách xưng hô/vùng giọng đã chỉ định trong Văn phong. "
             'Chỉ trả JSON {"translations":[{"id":"id gốc","text":"bản dịch tiếng Việt"}]}. '
             "Đủ mọi ID, không thiếu/thừa/trùng.\n"
             + project.instructions + "\nNgữ cảnh game: " + project.game_context
